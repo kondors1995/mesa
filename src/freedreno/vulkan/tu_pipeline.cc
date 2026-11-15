@@ -23,6 +23,7 @@
 
 #include "common/freedreno_guardband.h"
 #include "ir3/ir3_nir.h"
+#include "ir3/ir3_shader.h"
 #include "tu_cmd_buffer.h"
 #include "tu_cs.h"
 #include "tu_device.h"
@@ -4791,6 +4792,80 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
          vk_pipeline_flags_feedback_loops(builder->graphics_state.pipeline_flags);
       gfx_pipeline->feedback_loop_may_involve_textures =
          builder->graphics_state.feedback_loop_not_input_only;
+
+      if (tu_dbg_log_enabled()) {
+         const struct vk_depth_stencil_state *ds = builder->graphics_state.ds;
+         const struct vk_color_blend_state *cb = builder->graphics_state.cb;
+         const struct vk_rasterization_state *rs = builder->graphics_state.rs;
+         tu_dbg_log("A5_PIPE_BUILD pipe=%p vs=%p fs=%p ds(t=%u w=%u op=%u bnd=%u st=%u/%u/%u) cb(nrts=%u cwe=0x%x lop=%u/%u b0=%u wm0=0x%x rgb=(%u,%u,%u) a=(%u,%u,%u)) rs(cull=%u dcl=%u)",
+                    *pipeline,
+                    (*pipeline)->shaders[MESA_SHADER_VERTEX],
+                    (*pipeline)->shaders[MESA_SHADER_FRAGMENT],
+                    ds ? (unsigned)ds->depth.test_enable : 0u,
+                    ds ? (unsigned)ds->depth.write_enable : 0u,
+                    ds ? (unsigned)ds->depth.compare_op : 0u,
+                    ds ? (unsigned)ds->depth.bounds_test.enable : 0u,
+                    ds ? (unsigned)ds->stencil.test_enable : 0u,
+                    ds ? (unsigned)ds->stencil.front.op.compare : 0u,
+                    ds ? (unsigned)ds->stencil.back.op.compare : 0u,
+                    cb ? (unsigned)cb->attachment_count : 0u,
+                    cb ? (unsigned)cb->color_write_enables : 0u,
+                    cb ? (unsigned)cb->logic_op_enable : 0u,
+                    cb ? (unsigned)cb->logic_op : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].blend_enable : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].write_mask : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].src_color_blend_factor : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].dst_color_blend_factor : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].color_blend_op : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].src_alpha_blend_factor : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].dst_alpha_blend_factor : 0u,
+                    (cb && cb->attachment_count > 0) ? (unsigned)cb->attachments[0].alpha_blend_op : 0u,
+                    rs ? (unsigned)rs->cull_mode : 0u,
+                    rs ? (unsigned)rs->depth_clamp_enable : 0u);
+         static pthread_mutex_t sh_log_mtx = PTHREAD_MUTEX_INITIALIZER;
+         static const void *logged_sh[128];
+         static unsigned num_logged_sh = 0;
+         mesa_shader_stage stages[2] = { MESA_SHADER_VERTEX, MESA_SHADER_FRAGMENT };
+         pthread_mutex_lock(&sh_log_mtx);
+         FILE *sf = fopen("/data/local/tmp/tu_sh_disasm.txt", "a");
+         for (unsigned si = 0; si < 2; si++) {
+            struct tu_shader *s = (*pipeline)->shaders[stages[si]];
+            if (!s || !s->variant || !s->tu5_binary_iova)
+               continue;
+            bool seen = false;
+            for (unsigned k = 0; k < num_logged_sh; k++) {
+               if (logged_sh[k] == s->variant) { seen = true; break; }
+            }
+            if (!seen && num_logged_sh < 128 && sf) {
+               logged_sh[num_logged_sh++] = s->variant;
+               uint32_t *bin = reinterpret_cast<uint32_t *>(
+                  static_cast<char *>(tu_suballoc_bo_map(&s->bo)) +
+                  (s->tu5_binary_iova - s->bo.iova));
+               fprintf(sf, "=== stage=%u shader=%p var=%p instrlen=%u clen=%u pcdw=%u pcoff=%u clip=0x%x cull=0x%x ===\n",
+                       (unsigned)stages[si], s, s->variant,
+                       s->variant->instrlen, s->variant->constlen,
+                       s->const_state.push_consts.dwords,
+                       s->variant->const_state->allocs.consts[IR3_CONST_ALLOC_PUSH_CONSTS].offset_vec4,
+                       s->variant->clip_mask, s->variant->cull_mask);
+               if (s->variant->ir) {
+                  ir3_shader_disasm(const_cast<struct ir3_shader_variant *>(s->variant), bin, sf);
+               } else {
+                  fprintf(sf, "  const_allocs: max_vec4=%u ubo_off=%u imm_cnt=%u raw_dw=%u:",
+                          s->variant->const_state->allocs.max_const_offset_vec4,
+                          s->variant->const_state->allocs.consts[IR3_CONST_ALLOC_UBO_RANGES].offset_vec4,
+                          s->variant->imm_state.count,
+                          s->variant->info.sizedwords);
+                  for (unsigned w = 0; w < MIN2(s->variant->info.sizedwords, 64u); w++)
+                     fprintf(sf, " %08x", bin[w]);
+                  fprintf(sf, "\n");
+               }
+               fflush(sf);
+            }
+         }
+         if (sf)
+            fclose(sf);
+         pthread_mutex_unlock(&sh_log_mtx);
+      }
    }
 
    return VK_SUCCESS;

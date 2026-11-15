@@ -4808,6 +4808,16 @@ tu_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
       vk_cmd_set_vertex_binding_strides(&cmd->vk, firstBinding, bindingCount,
                                         pStrides);
    }
+   if (cmd->device->physical_device->info->chip == 5 && tu_dbg_log_enabled()) {
+      for (uint32_t i = 0; i < bindingCount && i < 2; i++) {
+         tu_dbg_log("A5_BINDVB b=%u cnt=%u buf=%p off=%llu sz=%llu pstr=%llu dyn_str=%u",
+                    firstBinding + i, bindingCount, (void *)pBuffers[i],
+                    (unsigned long long)pOffsets[i],
+                    (unsigned long long)(pSizes ? pSizes[i] : 0),
+                    (unsigned long long)(pStrides ? pStrides[i] : 0),
+                    cmd->vk.dynamic_graphics_state.vi_binding_strides[firstBinding + i]);
+      }
+   }
 
    for (uint32_t i = 0; i < bindingCount; i++) {
       if (pBuffers[i] == VK_NULL_HANDLE) {
@@ -5582,6 +5592,17 @@ tu_CmdPushConstants2KHR(VkCommandBuffer commandBuffer,
    memcpy(reinterpret_cast<char *>(cmd->push_constants) + pPushConstantsInfo->offset,
           pPushConstantsInfo->pValues, pPushConstantsInfo->size);
    cmd->state.dirty |= TU_CMD_DIRTY_SHADER_CONSTS;
+   if (tu_dbg_log_enabled()) {
+      const float *f = static_cast<const float *>(pPushConstantsInfo->pValues);
+      uint32_t n = MIN2(pPushConstantsInfo->size / 4, 8u);
+      tu_dbg_log("A5_PC st=0x%x off=%u sz=%u f=[%g,%g,%g,%g,%g,%g,%g,%g]",
+                 pPushConstantsInfo->stageFlags,
+                 pPushConstantsInfo->offset, pPushConstantsInfo->size,
+                 n > 0 ? f[0] : 0.f, n > 1 ? f[1] : 0.f,
+                 n > 2 ? f[2] : 0.f, n > 3 ? f[3] : 0.f,
+                 n > 4 ? f[4] : 0.f, n > 5 ? f[5] : 0.f,
+                 n > 6 ? f[6] : 0.f, n > 7 ? f[7] : 0.f);
+   }
 }
 
 /* Clean everything which has been made available but we haven't actually
@@ -5803,6 +5824,22 @@ tu_CmdBindPipeline(VkCommandBuffer commandBuffer,
 
    vk_cmd_set_dynamic_graphics_state(&cmd->vk,
                                      &gfx_pipeline->dynamic_state);
+
+   bool static_vi_strides =
+      BITSET_TEST(gfx_pipeline->dynamic_state.set,
+                  MESA_VK_DYNAMIC_VI_BINDING_STRIDES);
+   if (cmd->device->physical_device->info->chip == 5 &&
+       cmd->state.static_vi_strides != static_vi_strides) {
+      cmd->state.dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
+   }
+   cmd->state.static_vi_strides = static_vi_strides;
+
+   if (cmd->device->physical_device->info->chip == 5 && tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_BINDPIPE pipe=%p set_mask=0x%x static_vi=%u vs=%p fs=%p",
+                 pipeline, pipeline->set_state_mask, static_vi_strides ? 1u : 0u,
+                 pipeline->shaders[MESA_SHADER_VERTEX],
+                 pipeline->shaders[MESA_SHADER_FRAGMENT]);
+   }
    cmd->state.program = pipeline->program;
 
    cmd->state.load_state = pipeline->load_state;
@@ -7419,12 +7456,20 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
                  pass->attachment_count);
       for (uint32_t a = 0; a < MIN2(pass->attachment_count, 4); a++) {
          const struct tu_image_view *iv = cmd->state.attachments[a];
-         tu_dbg_log("  RP_ATT[%u] view=%p img=%p fmt=%s tile=%d load=%d store=%d clr=0x%x",
+         const VkClearValue *cv = &cmd->state.clear_values[a];
+         bool is_ds = vk_format_is_depth_or_stencil(pass->attachments[a].format);
+         tu_dbg_log("  RP_ATT[%u] view=%p img=%p fmt=%s tile=%d load=%d store=%d clr=0x%x cv=(%g,%g,%g,%g ds=%.4f/0x%x)",
                     a, iv, iv ? iv->image : NULL,
                     tu_dbg_fmt_str(pass->attachments[a].format),
                     iv ? iv->image->layout[0].tile_mode : -1,
                     pass->attachments[a].load, pass->attachments[a].store,
-                    pass->attachments[a].clear_mask);
+                    pass->attachments[a].clear_mask,
+                    is_ds ? 0.f : cv->color.float32[0],
+                    is_ds ? 0.f : cv->color.float32[1],
+                    is_ds ? 0.f : cv->color.float32[2],
+                    is_ds ? 0.f : cv->color.float32[3],
+                    is_ds ? cv->depthStencil.depth : 0.f,
+                    is_ds ? cv->depthStencil.stencil : 0u);
       }
    }
 
@@ -9069,6 +9114,8 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
           BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                       MESA_VK_DYNAMIC_VI) ||
           BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                      MESA_VK_DYNAMIC_VI_BINDINGS_VALID) ||
+          BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                       MESA_VK_DYNAMIC_VI_BINDING_STRIDES)) {
          tu5_emit_vertex_buffers(cmd);
          dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
@@ -9398,6 +9445,20 @@ tu_CmdDraw(VkCommandBuffer commandBuffer,
 
    tu6_draw_common<CHIP>(cmd, cs, false, vertexCount);
 
+   if (CHIP == A5XX && tu_dbg_log_enabled()) {
+      const struct tu_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+      const struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+      tu_dbg_log("A5_DRAW topo=%u vcnt=%u icnt=%u first=%u finst=%u vs=%p(in=%u,inst=%u,c=%u) fs=%p(in=%u,inst=%u,c=%u,kill=%u)",
+                 (unsigned)cmd->vk.dynamic_graphics_state.ia.primitive_topology, vertexCount, instanceCount, firstVertex, firstInstance,
+                 vs, vs && vs->variant ? vs->variant->attr_in : 0,
+                 vs && vs->variant ? vs->variant->instrlen : 0,
+                 vs && vs->variant ? vs->variant->constlen : 0,
+                 fs, fs && fs->variant ? fs->variant->total_in : 0,
+                 fs && fs->variant ? fs->variant->instrlen : 0,
+                 fs && fs->variant ? fs->variant->constlen : 0,
+                 fs && fs->variant ? fs->variant->has_kill : 0);
+   }
+
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 3);
    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
    tu_cs_emit(cs, instanceCount);
@@ -9471,6 +9532,21 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
    tu6_emit_vs_params(cmd, 0, vertexOffset, firstInstance);
 
    tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
+
+   if (CHIP == A5XX && tu_dbg_log_enabled()) {
+      const struct tu_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+      const struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+      tu_dbg_log("A5_DRAWIDX topo=%u idx=%u inst=%u first=%u voff=%d finst=%u isz=%u iva=0x%llx max=%u vs=%p(in=%u,inst=%u,c=%u) fs=%p(in=%u,inst=%u,c=%u,kill=%u)",
+                 (unsigned)cmd->vk.dynamic_graphics_state.ia.primitive_topology, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance,
+                 cmd->state.index_size, (unsigned long long)cmd->state.index_va, cmd->state.max_index_count,
+                 vs, vs && vs->variant ? vs->variant->attr_in : 0,
+                 vs && vs->variant ? vs->variant->instrlen : 0,
+                 vs && vs->variant ? vs->variant->constlen : 0,
+                 fs, fs && fs->variant ? fs->variant->total_in : 0,
+                 fs && fs->variant ? fs->variant->instrlen : 0,
+                 fs && fs->variant ? fs->variant->constlen : 0,
+                 fs && fs->variant ? fs->variant->has_kill : 0);
+   }
 
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));

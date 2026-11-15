@@ -294,6 +294,7 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
       }
    }
 
+   uint32_t uploaded_ranges = 0;
    for (uint32_t i = 0; i < ir_const->ubo_state.num_enabled; i++) {
       const struct ir3_ubo_range *r = &ir_const->ubo_state.range[i];
       if (r->ubo.bindless || r->ubo.global)
@@ -320,6 +321,12 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
       if (size_vec4 == 0)
          continue;
 
+      uploaded_ranges++;
+      if (tu_dbg_log_enabled() && uploaded_ranges <= 4) {
+         tu_dbg_log("A5_CONST_RNG st=%u i=%u dst=%u szv=%u r=(%u..%u) ubo=%u va=0x%llx",
+                    (unsigned)stage, i, dst_vec4, size_vec4, r->start, r->end,
+                    ubo_idx, (unsigned long long)(ubo_vas[ubo_idx] + r->start));
+      }
       tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3);
       tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(dst_vec4) |
                      CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
@@ -327,6 +334,15 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
                      CP_LOAD_STATE4_0_NUM_UNIT(size_vec4));
       tu_cs_emit_qw(cs, (ubo_vas[ubo_idx] + r->start) |
                         static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
+   }
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_CONST st=%u clen=%u ptype=%u pdw=%u num_ubo=%u bind_ubo=%u rng=%u/%u inline=%u c_ubo=%d va0=0x%llx sz0=%llu",
+                 (unsigned)stage, xs->constlen, (unsigned)tu_const->push_consts.type,
+                 tu_const->push_consts.dwords, ir_const->num_ubos, bindings->num_ubo,
+                 uploaded_ranges, ir_const->ubo_state.num_enabled,
+                 tu_const->num_inline_ubos, ir_const->consts_ubo.idx,
+                 (unsigned long long)ubo_vas[0], (unsigned long long)ubo_sizes[0]);
    }
 
    if (ir_const->image_dims.count > 0 &&
@@ -667,10 +683,24 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
    if (tu_dbg_log_enabled()) {
       const struct tu5_shader_bindings *vb = vs ? vs->tu5_bindings : NULL;
       const struct tu5_shader_bindings *fb = fs ? fs->tu5_bindings : NULL;
-      tu_dbg_log("A5_DESC cmd=%p vs=%p(tex=%u,samp=%u,ubo=%u) fs=%p(tex=%u,samp=%u,img=%u,ubo=%u,ssbo=%u)",
+      tu_dbg_log("A5_DESC cmd=%p vs=%p(tex=%u,samp=%u,ubo=%u,ssbo=%u,img=%u,hss=%d) fs=%p(tex=%u,samp=%u,img=%u,ubo=%u,ssbo=%u,hss=%d) uav=%p",
                  cmd, vs, vb ? vb->num_tex : 0, vb ? vb->num_samp : 0, vb ? vb->num_ubo : 0,
+                 vb ? vb->num_ssbo : 0, vb ? vb->num_image : 0,
+                 (vs && vs->variant) ? vs->variant->has_ssbo : -1,
                  fs, fb ? fb->num_tex : 0, fb ? fb->num_samp : 0, fb ? fb->num_image : 0,
-                 fb ? fb->num_ubo : 0, fb ? fb->num_ssbo : 0);
+                 fb ? fb->num_ubo : 0, fb ? fb->num_ssbo : 0,
+                 (fs && fs->variant) ? fs->variant->has_ssbo : -1,
+                 uav_shader);
+      if (vb && vb->num_ssbo > 0) {
+         for (uint32_t i = 0; i < vb->num_ssbo; i++) {
+            VkDescriptorType dt = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+            const uint32_t *d = tu5_lookup_desc(cmd, vs, descriptors_state, &vb->ssbo[i], false, &dt);
+            tu_dbg_log("  A5_VS_SSBO[%u] set=%u bind=%u arr=%u dyn=%u dt=%d ptr=%p d12..15=[%08x %08x %08x %08x]",
+                       i, vb->ssbo[i].set, vb->ssbo[i].binding, vb->ssbo[i].array_index,
+                       vb->ssbo[i].is_dynamic, (int)dt, d,
+                       d ? d[12] : 0, d ? d[13] : 0, d ? d[14] : 0, d ? d[15] : 0);
+         }
+      }
       if (fb) {
          for (uint32_t i = 0; i < fb->num_tex; i++) {
             const uint32_t *d = tu5_lookup_desc(cmd, fs, descriptors_state, &fb->tex[i], false, NULL);
@@ -756,7 +786,13 @@ tu5_emit_vertex_buffers(struct tu_cmd_buffer *cmd)
          uint32_t size = (vb_base && vb_size > attr->offset)
                             ? (vb_size - attr->offset)
                             : 0;
-         uint32_t stride = strides[attr->binding];
+         /* Per Vulkan spec, vkCmdBindVertexBuffers2 pStrides is ignored unless
+          * VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE (or VERTEX_INPUT_EXT)
+          * is enabled on the bound pipeline; use static binding->stride then.
+          */
+         uint32_t stride = cmd->state.static_vi_strides
+                              ? binding->stride
+                              : strides[attr->binding];
          bool instanced = binding->input_rate == VK_VERTEX_INPUT_RATE_INSTANCE;
 
          tu_cs_emit_pkt4(&cs, REG_A5XX_VFD_FETCH(loc), 4);
@@ -774,6 +810,13 @@ tu5_emit_vertex_buffers(struct tu_cmd_buffer *cmd)
                     COND(!util_format_is_pure_integer(pipe_format),
                          A5XX_VFD_DECODE_INSTR_FLOAT));
          tu_cs_emit(&cs, instanced ? binding->divisor : 1);
+
+         if (tu_dbg_log_enabled()) {
+            tu_dbg_log("A5_VFD loc=%u/%u valid=0x%x bind=%u vkfmt=%u a5fmt=0x%x off=%u base=0x%llx sz=%u str=%u(vi=%u) inst=%u",
+                       loc, attr_count, vi->attributes_valid, attr->binding,
+                       (unsigned)attr->format, fmt.fmt, attr->offset,
+                       (unsigned long long)vb_base, size, stride, binding->stride, instanced ? 1u : 0u);
+         }
       } else {
          tu_cs_emit_pkt4(&cs, REG_A5XX_VFD_FETCH(loc), 4);
          tu_cs_emit(&cs, 0);
@@ -784,6 +827,11 @@ tu5_emit_vertex_buffers(struct tu_cmd_buffer *cmd)
          tu_cs_emit_pkt4(&cs, REG_A5XX_VFD_DECODE(loc), 2);
          tu_cs_emit(&cs, 0);
          tu_cs_emit(&cs, 0);
+
+         if (tu_dbg_log_enabled()) {
+            tu_dbg_log("A5_VFD loc=%u/%u INVALID vi=%p valid=0x%x",
+                       loc, attr_count, vi, vi ? vi->attributes_valid : 0u);
+         }
       }
    }
 }
@@ -1057,6 +1105,9 @@ tu5_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu_cs_emit(cs, 0x00000000);
 
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_SC_SCREEN_SCISSOR_CNTL, 1);
+   tu_cs_emit(cs, 0x00000000);
+
+   tu_cs_emit_pkt4(cs, REG_A5XX_RB_ALPHA_CONTROL, 1);
    tu_cs_emit(cs, 0x00000000);
 
    tu_cs_emit_pkt4(cs, REG_A5XX_SP_VS_CONFIG_MAX_CONST, 1);

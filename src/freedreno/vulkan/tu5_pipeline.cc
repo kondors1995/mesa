@@ -127,6 +127,13 @@ tu5_emit_viewport(struct tu_cs *cs,
    tu_cs_emit(cs, A5XX_RB_VIEWPORT_ZCLAMP_NEAR(zmin));
    tu_cs_emit(cs, A5XX_RB_VIEWPORT_ZCLAMP_FAR(zmax));
 
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_VP xywh=(%.1f,%.1f,%.1f,%.1f) d=(%.3f,%.3f) zc=(%.3f,%.3f) neg1=%u",
+                 viewport->x, viewport->y, viewport->width, viewport->height,
+                 viewport->minDepth, viewport->maxDepth, zmin, zmax,
+                 vp->depth_clip_negative_one_to_one ? 1u : 0u);
+   }
+
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_CL_GUARDBAND_CLIP_ADJ, 1);
    tu_cs_emit(cs, A5XX_GRAS_CL_GUARDBAND_CLIP_ADJ_HORZ(gb_w) |
                   A5XX_GRAS_CL_GUARDBAND_CLIP_ADJ_VERT(gb_h));
@@ -307,6 +314,13 @@ tu5_emit_blend(struct tu_cs *cs,
       tu_cs_emit(cs, mrt_control[i]);
       tu_cs_emit(cs, mrt_blend_control[i]);
    }
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_BLEND nrts=%u att=%u cw=0x%x bmask=0x%x mrt0=0x%08x b0=0x%08x comp0=0x%x a2c=%u rop=%u",
+                 num_rts, cb->attachment_count, cb->color_write_enables, blend_enable_mask,
+                 mrt_control[0], mrt_blend_control[0], mrt_comp[0],
+                 alpha_to_coverage_enable ? 1u : 0u, cb->logic_op_enable ? 1u : 0u);
+   }
 }
 
 unsigned
@@ -378,12 +392,21 @@ tu5_emit_rast(struct tu_cs *cs,
                   A5XX_GRAS_SU_CNTL_LINE_MODE(line_mode));
 
    bool depth_clip_enable = vk_rasterization_state_depth_clip_enable(rs);
+   uint32_t gras_cl_cntl =
+      COND(!depth_clip_enable,
+           A5XX_GRAS_CL_CNTL_ZNEAR_CLIP_DISABLE |
+           A5XX_GRAS_CL_CNTL_ZFAR_CLIP_DISABLE) |
+      COND(rs->depth_clamp_enable, A5XX_GRAS_CL_CNTL_Z_CLAMP_ENABLE) |
+      COND(!vp->depth_clip_negative_one_to_one, A5XX_GRAS_CL_CNTL_ZERO_GB_SCALE_Z);
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_CL_CNTL, 1);
-   tu_cs_emit(cs, COND(!depth_clip_enable,
-                       A5XX_GRAS_CL_CNTL_ZNEAR_CLIP_DISABLE |
-                       A5XX_GRAS_CL_CNTL_ZFAR_CLIP_DISABLE) |
-                  COND(rs->depth_clamp_enable, A5XX_GRAS_CL_CNTL_Z_CLAMP_ENABLE) |
-                  COND(!vp->depth_clip_negative_one_to_one, A5XX_GRAS_CL_CNTL_ZERO_GB_SCALE_Z));
+   tu_cs_emit(cs, gras_cl_cntl);
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_RAST cull=0x%x front=%u poly=%u dclip=%u dclamp=%u neg1=%u cl=0x%x",
+                 rs->cull_mode, (unsigned)rs->front_face, (unsigned)rs->polygon_mode,
+                 depth_clip_enable ? 1u : 0u, rs->depth_clamp_enable ? 1u : 0u,
+                 vp->depth_clip_negative_one_to_one ? 1u : 0u, gras_cl_cntl);
+   }
 
    enum adreno_pa_su_sc_draw polymode = tu5_polygon_mode(rs->polygon_mode);
    tu_cs_emit_pkt4(cs, REG_A5XX_PC_RASTER_CNTL, 1);
@@ -436,6 +459,15 @@ tu5_emit_ds(struct tu_cs *cs,
               A5XX_RB_STENCILREFMASK_BF_STENCILREF(ds->stencil.back.reference) |
               A5XX_RB_STENCILREFMASK_BF_STENCILMASK(ds->stencil.back.compare_mask) |
               A5XX_RB_STENCILREFMASK_BF_STENCILWRITEMASK(ds->stencil.back.write_mask));
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_STENCIL en=%u att=0x%x f=(op=%u ref=%u m=0x%x wm=0x%x) b=(op=%u ref=%u m=0x%x wm=0x%x)",
+                 stencil_test_enable ? 1u : 0u, rp->attachments,
+                 ds->stencil.front.op.compare, ds->stencil.front.reference,
+                 ds->stencil.front.compare_mask, ds->stencil.front.write_mask,
+                 ds->stencil.back.op.compare, ds->stencil.back.reference,
+                 ds->stencil.back.compare_mask, ds->stencil.back.write_mask);
+   }
 }
 
 unsigned
@@ -464,4 +496,13 @@ tu5_emit_rb_depth_cntl(struct tu_cs *cs,
                  A5XX_RB_DEPTH_CNTL_Z_READ_ENABLE);
    }
    tu_cs_emit(cs, val);
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_DEPTH att=0x%x test=%u write=%u op=%u bnd=%u(%.3f,%.3f) clamp=%u rb=0x%x",
+                 rp->attachments, ds->depth.test_enable ? 1u : 0u,
+                 ds->depth.write_enable ? 1u : 0u, (unsigned)ds->depth.compare_op,
+                 ds->depth.bounds_test.enable ? 1u : 0u,
+                 ds->depth.bounds_test.min, ds->depth.bounds_test.max,
+                 rs->depth_clamp_enable ? 1u : 0u, val);
+   }
 }

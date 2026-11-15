@@ -660,4 +660,11 @@ tu5_emit_vpc(struct tu_cs *cs,
 
    tu_cs_emit_pkt4(cs, REG_A5XX_PC_CLIP_CNTL, 1);
    tu_cs_emit(cs, 0);
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("A5_VPC vs=%p(in=%u,inst=%u,c=%u,clip=0x%x,cull=0x%x,pos=0x%x) fs=%p(tin=%u,inst=%u,c=%u,kill=%u) cnt=%u max=%u posloc=%u",
+                 vs, vs->attr_in, vs->instrlen, vs->constlen, vs->clip_mask, vs->cull_mask, pos_regid,
+                 fs, fs->total_in, fs->instrlen, fs->constlen, fs->has_kill,
+                 linkage.cnt, linkage.max_loc, pos_loc);
+   }
 }

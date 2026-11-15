@@ -635,6 +635,7 @@ struct tu_cmd_state
    bool pipeline_accesses_smask;
 
    bool pipeline_blend_lrz, pipeline_bandwidth, pipeline_disable_fs;
+   bool static_vi_strides;
    uint32_t pipeline_draw_states;
 
    /* VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT and
