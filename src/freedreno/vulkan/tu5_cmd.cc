@@ -935,11 +935,7 @@ tu5_emit_rb_ccu_cntl(struct tu_cs *cs,
    uint32_t val;
 
    if (gmem) {
-      /* On A5xx, GMEM CCU uses 8 KB (quarter of 32 KB) per CCU at the top of GMEM. */
-      uint32_t num_ccu = gpu_id >= 530 ? 4 : (gpu_id >= 509 ? 2 : 1);
-      uint32_t gmem_size = phys_dev->gmem_size;
-      uint32_t ccu_bytes = num_ccu * 0x2000;
-      uint32_t offset = gmem_size > ccu_bytes ? gmem_size - ccu_bytes : 0;
+      uint32_t offset = phys_dev->config_gmem.color_ccu_offset;
       val = ((offset * 0x800) & 0xffe00000) | 0x0013c080;
    } else {
       if (gpu_id >= 530)

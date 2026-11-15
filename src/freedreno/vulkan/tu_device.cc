@@ -1886,7 +1886,15 @@ tu_physical_device_init(struct tu_physical_device *device,
       device->info = &device->dev_info;
 
       if (fd_dev_gen(&device->dev_id) == 5) {
-         device->usable_gmem_size_gmem = device->gmem_size;
+         uint32_t gpu_id = device->dev_id.gpu_id;
+         uint32_t num_ccu = gpu_id >= 530 ? 4 : (gpu_id >= 509 ? 2 : 1);
+         uint32_t ccu_bytes = num_ccu * 0x2000;
+         uint32_t ccu_offset = device->gmem_size > ccu_bytes ?
+            device->gmem_size - ccu_bytes : 0;
+         device->config_gmem.color_ccu_offset = ccu_offset;
+         device->config_gmem.depth_ccu_offset = ccu_offset;
+         device->usable_gmem_size_gmem =
+            ccu_offset ? ccu_offset : device->gmem_size;
       } else {
          device->usable_gmem_size_gmem =
             fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
