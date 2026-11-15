@@ -206,54 +206,7 @@ get_device_extensions(const struct tu_physical_device *device,
                       struct vk_device_extension_table *ext)
 {
    bool has_gralloc = vk_android_get_ugralloc() != NULL;
-
-   if (device->info->chip == 5) {
-      *ext = (struct vk_device_extension_table) { .table = {
-         .KHR_8bit_storage = device->info->props.storage_8bit,
-         .KHR_16bit_storage = device->info->props.storage_16bit,
-         .KHR_bind_memory2 = true,
-         .KHR_copy_commands2 = true,
-         .KHR_create_renderpass2 = true,
-         .KHR_dedicated_allocation = true,
-         .KHR_depth_stencil_resolve = true,
-         .KHR_descriptor_update_template = true,
-         .KHR_driver_properties = true,
-         .KHR_external_fence = true,
-         .KHR_external_fence_fd = true,
-         .KHR_external_memory = true,
-         .KHR_external_memory_fd = true,
-         .KHR_external_semaphore = true,
-         .KHR_external_semaphore_fd = true,
-         .KHR_get_memory_requirements2 = true,
-         .KHR_image_format_list = true,
-         .KHR_imageless_framebuffer = true,
-         .KHR_index_type_uint8 = true,
-         .KHR_maintenance1 = true,
-         .KHR_maintenance2 = true,
-         .KHR_maintenance3 = true,
-         .KHR_push_descriptor = true,
-         .KHR_relaxed_block_layout = true,
-         .KHR_sampler_mirror_clamp_to_edge = true,
-         .KHR_separate_depth_stencil_layouts = true,
-         .KHR_shader_draw_parameters = true,
-         .KHR_storage_buffer_storage_class = true,
-#ifdef TU_USE_WSI_PLATFORM
-         .KHR_swapchain = true,
-         .KHR_swapchain_mutable_format = true,
-#endif
-         .KHR_uniform_buffer_standard_layout = true,
-         .KHR_variable_pointers = true,
-         .EXT_custom_border_color = true,
-         .EXT_external_memory_dma_buf = true,
-         .EXT_image_drm_format_modifier = true,
-         .EXT_index_type_uint8 = true,
-         .EXT_pipeline_creation_feedback = true,
-         .EXT_scalar_block_layout = true,
-         .ANDROID_external_memory_android_hardware_buffer = has_gralloc,
-         .ANDROID_native_buffer = has_gralloc,
-      } };
-      return;
-   }
+   bool is_a5xx = device->info->chip == 5;
 
    /* device->has_raytracing contains the value of the SW fuse. If the
     * device doesn't have a fuse (i.e. a740), we have to ignore it because
@@ -269,7 +222,8 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_16bit_storage = device->info->props.storage_16bit,
       .KHR_acceleration_structure = has_raytracing,
       .KHR_bind_memory2 = true,
-      .KHR_buffer_device_address = true,
+      /* ir3_a4xx lacks load_global/store_global/atomic_global */
+      .KHR_buffer_device_address = !is_a5xx,
       .KHR_calibrated_timestamps = device->info->props.has_persistent_counter,
       .KHR_compute_shader_derivatives = true,
       .KHR_copy_commands2 = true,
@@ -280,10 +234,12 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_depth_stencil_resolve = true,
       .KHR_descriptor_update_template = true,
       .KHR_device_group = true,
-      .KHR_draw_indirect_count = true,
+      /* A5xx lacks CP_DRAW_INDIRECT_MULTI */
+      .KHR_draw_indirect_count = !is_a5xx,
       .KHR_driver_properties = true,
       .KHR_dynamic_rendering = true,
-      .KHR_dynamic_rendering_local_read = true,
+      /* A5xx tu5 uses bindful descriptors and lacks A6xx local-read lowering */
+      .KHR_dynamic_rendering_local_read = !is_a5xx,
       .KHR_external_fence = true,
       .KHR_external_fence_fd = true,
       .KHR_external_memory = true,
@@ -329,10 +285,11 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_relaxed_block_layout = true,
       .KHR_robustness2 = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
-      .KHR_sampler_ycbcr_conversion = true,
+      .KHR_sampler_ycbcr_conversion = !is_a5xx,
       .KHR_separate_depth_stencil_layouts = true,
       .KHR_shader_atomic_int64 = device->info->props.has_64b_ssbo_atomics,
-      .KHR_shader_clock = true,
+      /* ir3_nir_lower_shader_clock uses load_global_offset */
+      .KHR_shader_clock = !is_a5xx,
       .KHR_shader_draw_parameters = true,
       .KHR_shader_expect_assume = true,
       .KHR_shader_float16_int8 = true,
@@ -344,8 +301,8 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_shader_quad_control = device->info->props.has_getfiberid,
       .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_extended_types = true,
-      .KHR_shader_subgroup_rotate = true,
-      .KHR_shader_subgroup_uniform_control_flow = true,
+      .KHR_shader_subgroup_rotate = !is_a5xx,
+      .KHR_shader_subgroup_uniform_control_flow = !is_a5xx,
       .KHR_shader_terminate_invocation = true,
       .KHR_spirv_1_4 = true,
       .KHR_storage_buffer_storage_class = true,
@@ -370,17 +327,19 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_border_color_swizzle = true,
       .EXT_calibrated_timestamps = device->info->props.has_persistent_counter,
       .EXT_color_write_enable = true,
-      .EXT_conditional_rendering = true,
+      /* tu_CmdBeginConditionalRenderingEXT uses CP_COND_REG_EXEC (A6XX+) */
+      .EXT_conditional_rendering = !is_a5xx,
       .EXT_conservative_rasterization = device->info->chip >= 7,
       .EXT_custom_border_color = true,
-      .EXT_custom_resolve = true,
+      .EXT_custom_resolve = !is_a5xx,
       .EXT_debug_marker = true,
       .EXT_depth_clamp_control = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_control = true,
       .EXT_depth_clip_enable = true,
-      .EXT_descriptor_buffer = true,
-      .EXT_descriptor_indexing = true,
+      /* A5xx uses bindful SS4_DIRECT copy rather than bindless descriptors */
+      .EXT_descriptor_buffer = !is_a5xx,
+      .EXT_descriptor_indexing = !is_a5xx,
       .EXT_device_address_binding_report = true,
       .EXT_device_memory_report = true,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
@@ -392,8 +351,9 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_extended_dynamic_state3 = true,
       .EXT_external_memory_dma_buf = true,
       .EXT_filter_cubic = device->info->props.has_tex_filter_cubic,
-      .EXT_fragment_density_map = true,
-      .EXT_fragment_density_map_offset = true,
+      /* FDM uses CP_COND_REG_EXEC (A6XX+) */
+      .EXT_fragment_density_map = !is_a5xx,
+      .EXT_fragment_density_map_offset = !is_a5xx,
       .EXT_global_priority = true,
       .EXT_global_priority_query = true,
       .EXT_graphics_pipeline_library = true,
@@ -407,7 +367,7 @@ get_device_extensions(const struct tu_physical_device *device,
 #endif
       .EXT_image_drm_format_modifier = true,
       .EXT_image_robustness = true,
-      .EXT_image_view_min_lod = true,
+      .EXT_image_view_min_lod = !is_a5xx,
       .EXT_index_type_uint8 = true,
       .EXT_inline_uniform_block = true,
       .EXT_legacy_dithering = true,
@@ -417,7 +377,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_map_memory_placed = true,
       .EXT_memory_budget = true,
       .EXT_multi_draw = true,
-      .EXT_multisampled_render_to_single_sampled = true,
+      .EXT_multisampled_render_to_single_sampled = !is_a5xx,
       .EXT_mutable_descriptor_type = true,
       .EXT_nested_command_buffer = true,
       .EXT_non_seamless_cube_map = true,
@@ -429,11 +389,12 @@ get_device_extensions(const struct tu_physical_device *device,
 #endif
       .EXT_primitive_restart_index = true,
       .EXT_primitive_topology_list_restart = true,
-      .EXT_primitives_generated_query = true,
+      /* A5xx lacks RBBM_PIPESTAT_* counters */
+      .EXT_primitives_generated_query = !is_a5xx,
       .EXT_private_data = true,
       .EXT_provoking_vertex = true,
       .EXT_queue_family_foreign = true,
-      .EXT_rasterization_order_attachment_access = true,
+      .EXT_rasterization_order_attachment_access = !is_a5xx,
       .EXT_robustness2 = true,
       .EXT_sample_locations = device->info->props.has_sample_locations,
       .EXT_sampler_filter_minmax = device->info->props.has_sampler_minmax,
@@ -444,11 +405,11 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_shader_image_atomic_int64 = device->info->props.has_64b_image_atomics,
       .EXT_shader_module_identifier = true,
       .EXT_shader_replicated_composites = true,
-      .EXT_shader_stencil_export = true,
+      .EXT_shader_stencil_export = !is_a5xx,
       .EXT_shader_subgroup_ballot =
          device->info->props.has_getfiberid && tu_subgroup_size(device) <= 64,
       .EXT_shader_subgroup_vote = device->info->props.has_getfiberid,
-      .EXT_shader_uniform_buffer_unsized_array = true,
+      .EXT_shader_uniform_buffer_unsized_array = !is_a5xx,
       .EXT_shader_viewport_index_layer = device->info->props.has_hw_multiview,
       .EXT_subgroup_size_control = true,
 #ifdef TU_USE_WSI_PLATFORM
@@ -457,7 +418,8 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_texel_buffer_alignment = true,
       .EXT_texture_compression_astc_hdr = device->info->props.has_astc_hdr,
       .EXT_tooling_info = true,
-      .EXT_transform_feedback = true,
+      /* tu5 lacks VPC_SO_* setup / A6xx VPC_SO_OVERRIDE */
+      .EXT_transform_feedback = !is_a5xx,
       .EXT_vertex_attribute_divisor = true,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_zero_initialize_device_memory = true,
@@ -466,7 +428,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .AMD_buffer_marker = true,
       .ANDROID_external_memory_android_hardware_buffer = has_gralloc,
       .ANDROID_native_buffer = has_gralloc,
-      .ARM_rasterization_order_attachment_access = true,
+      .ARM_rasterization_order_attachment_access = !is_a5xx,
       .GOOGLE_decorate_string = true,
 #ifdef TU_USE_WSI_PLATFORM
       .GOOGLE_display_timing = wsi_instance_supports_google_display_timing(&device->instance->vk, &device->instance->drirc.options),
@@ -475,16 +437,16 @@ get_device_extensions(const struct tu_physical_device *device,
       .GOOGLE_user_type = true,
       .IMG_filter_cubic = device->info->props.has_tex_filter_cubic,
       .NV_compute_shader_derivatives = true,
-      .QCOM_fragment_density_map_offset = true,
+      .QCOM_fragment_density_map_offset = !is_a5xx,
       .QCOM_image_processing = device->info->props.has_image_processing,
-      .QCOM_multiview_per_view_render_areas = true,
+      .QCOM_multiview_per_view_render_areas = !is_a5xx,
       .QCOM_multiview_per_view_viewports =
          device->info->props.has_per_view_viewport,
-      .QCOM_render_pass_shader_resolve = true,
-      .QCOM_rotated_copy_commands = true,
+      .QCOM_render_pass_shader_resolve = !is_a5xx,
+      .QCOM_rotated_copy_commands = !is_a5xx,
       .VALVE_buffer_device_address_allocation_alignment =
-         device->has_iova_align,
-      .VALVE_fragment_density_map_layered = true,
+         !is_a5xx && device->has_iova_align,
+      .VALVE_fragment_density_map_layered = !is_a5xx,
       .VALVE_mutable_descriptor_type = true,
    } };
 }
@@ -494,80 +456,15 @@ tu_get_features(struct tu_physical_device *pdevice,
                 struct vk_features *features)
 {
    *features = (struct vk_features) { false };
-
-   if (pdevice->info->chip == 5) {
-      /* Vulkan 1.0 */
-      features->robustBufferAccess = true;
-      features->fullDrawIndexUint32 = true;
-      features->imageCubeArray = true;
-      features->independentBlend = true;
-      features->geometryShader = false;
-      features->tessellationShader = false;
-      features->sampleRateShading = true;
-      features->dualSrcBlend = true;
-      features->logicOp = true;
-      features->multiDrawIndirect = true;
-      features->drawIndirectFirstInstance = true;
-      features->depthClamp = true;
-      features->depthBiasClamp = true;
-      features->fillModeNonSolid = true;
-      features->depthBounds = true;
-      features->wideLines = false;
-      features->largePoints = true;
-      features->alphaToOne = true;
-      features->multiViewport = true;
-      features->samplerAnisotropy = true;
-      features->textureCompressionETC2 = true;
-      features->textureCompressionASTC_LDR = true;
-      features->textureCompressionBC = true;
-      features->occlusionQueryPrecise = true;
-      features->pipelineStatisticsQuery = false;
-      features->vertexPipelineStoresAndAtomics = false;
-      features->fragmentStoresAndAtomics = true;
-      features->shaderTessellationAndGeometryPointSize = false;
-      features->shaderImageGatherExtended = true;
-      features->shaderStorageImageExtendedFormats = true;
-      features->shaderStorageImageMultisample = false;
-      features->shaderStorageImageReadWithoutFormat = false;
-      features->shaderStorageImageWriteWithoutFormat = true;
-      features->shaderUniformBufferArrayDynamicIndexing = false;
-      features->shaderSampledImageArrayDynamicIndexing = false;
-      features->shaderStorageBufferArrayDynamicIndexing = false;
-      features->shaderStorageImageArrayDynamicIndexing = false;
-      features->shaderClipDistance = false;
-      features->shaderCullDistance = false;
-      features->shaderFloat64 = false;
-      features->shaderInt64 = false;
-      features->shaderInt16 = false;
-      features->shaderResourceResidency = false;
-      features->shaderResourceMinLod = false;
-      features->variableMultisampleRate = true;
-      features->inheritedQueries = true;
-
-      /* Vulkan 1.1 */
-      features->storageBuffer16BitAccess = pdevice->info->props.storage_16bit;
-      features->variablePointersStorageBuffer = true;
-      features->variablePointers = true;
-      features->shaderDrawParameters = true;
-
-      /* Vulkan 1.2+ / extensions */
-      features->uniformBufferStandardLayout = true;
-      features->scalarBlockLayout = true;
-      features->imagelessFramebuffer = true;
-      features->separateDepthStencilLayouts = true;
-      features->customBorderColors = true;
-      features->customBorderColorWithoutFormat = true;
-      features->indexTypeUint8 = true;
-      return;
-   }
+   bool is_a5xx = pdevice->info->chip == 5;
 
    /* Vulkan 1.0 */
    features->robustBufferAccess = true;
    features->fullDrawIndexUint32 = true;
    features->imageCubeArray = true;
    features->independentBlend = true;
-   features->geometryShader = !pdevice->info->props.is_a702;
-   features->tessellationShader = !pdevice->info->props.is_a702;
+   features->geometryShader = !is_a5xx && !pdevice->info->props.is_a702;
+   features->tessellationShader = !is_a5xx && !pdevice->info->props.is_a702;
    features->sampleRateShading = true;
    features->dualSrcBlend = true;
    features->logicOp = true;
@@ -587,21 +484,22 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* no BC6H & BC7 support on A702 */
    features->textureCompressionBC = !pdevice->info->props.is_a702;
    features->occlusionQueryPrecise = true;
-   features->pipelineStatisticsQuery = true;
-   features->vertexPipelineStoresAndAtomics = true;
+   features->pipelineStatisticsQuery = !is_a5xx;
+   features->vertexPipelineStoresAndAtomics = !is_a5xx;
    features->fragmentStoresAndAtomics = true;
-   features->shaderTessellationAndGeometryPointSize = !pdevice->info->props.is_a702;
+   features->shaderTessellationAndGeometryPointSize =
+      !is_a5xx && !pdevice->info->props.is_a702;
    features->shaderImageGatherExtended = true;
    features->shaderStorageImageExtendedFormats = true;
    features->shaderStorageImageMultisample = false;
-   features->shaderStorageImageReadWithoutFormat = true;
+   features->shaderStorageImageReadWithoutFormat = !is_a5xx;
    features->shaderStorageImageWriteWithoutFormat = true;
    features->shaderUniformBufferArrayDynamicIndexing = true;
    features->shaderSampledImageArrayDynamicIndexing = true;
    features->shaderStorageBufferArrayDynamicIndexing = true;
    features->shaderStorageImageArrayDynamicIndexing = true;
-   features->shaderClipDistance = true;
-   features->shaderCullDistance = true;
+   features->shaderClipDistance = !is_a5xx;
+   features->shaderCullDistance = !is_a5xx;
    features->shaderFloat64 = false;
    features->shaderInt64 = true;
    features->shaderInt16 = true;
@@ -614,7 +512,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->sparseResidency8Samples = features->sparseResidencyImage2D;
    features->sparseResidencyAliased = pdevice->has_sparse_prr;
    features->shaderResourceResidency = pdevice->has_sparse_prr;
-   features->shaderResourceMinLod = true;
+   features->shaderResourceMinLod = !is_a5xx;
    features->variableMultisampleRate = true;
    features->inheritedQueries = true;
 
@@ -634,12 +532,12 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->variablePointersStorageBuffer       = true;
    features->variablePointers                    = true;
    features->protectedMemory                     = false;
-   features->samplerYcbcrConversion              = true;
+   features->samplerYcbcrConversion              = !is_a5xx;
    features->shaderDrawParameters                = true;
 
    /* Vulkan 1.2 */
    features->samplerMirrorClampToEdge            = true;
-   features->drawIndirectCount                   = true;
+   features->drawIndirectCount                   = !is_a5xx;
    features->storageBuffer8BitAccess             = pdevice->info->props.storage_8bit;
    features->uniformAndStorageBuffer8BitAccess   = false;
    features->storagePushConstant8                = false;
@@ -649,27 +547,27 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderFloat16                       = true;
    features->shaderInt8                          = true;
 
-   features->descriptorIndexing                                 = true;
+   features->descriptorIndexing                                 = !is_a5xx;
    features->shaderInputAttachmentArrayDynamicIndexing          = false;
-   features->shaderUniformTexelBufferArrayDynamicIndexing       = true;
-   features->shaderStorageTexelBufferArrayDynamicIndexing       = true;
-   features->shaderUniformBufferArrayNonUniformIndexing         = true;
-   features->shaderSampledImageArrayNonUniformIndexing          = true;
-   features->shaderStorageBufferArrayNonUniformIndexing         = true;
-   features->shaderStorageImageArrayNonUniformIndexing          = true;
+   features->shaderUniformTexelBufferArrayDynamicIndexing       = !is_a5xx;
+   features->shaderStorageTexelBufferArrayDynamicIndexing       = !is_a5xx;
+   features->shaderUniformBufferArrayNonUniformIndexing         = !is_a5xx;
+   features->shaderSampledImageArrayNonUniformIndexing          = !is_a5xx;
+   features->shaderStorageBufferArrayNonUniformIndexing         = !is_a5xx;
+   features->shaderStorageImageArrayNonUniformIndexing          = !is_a5xx;
    features->shaderInputAttachmentArrayNonUniformIndexing       = false;
-   features->shaderUniformTexelBufferArrayNonUniformIndexing    = true;
-   features->shaderStorageTexelBufferArrayNonUniformIndexing    = true;
-   features->descriptorBindingUniformBufferUpdateAfterBind      = true;
-   features->descriptorBindingSampledImageUpdateAfterBind       = true;
-   features->descriptorBindingStorageImageUpdateAfterBind       = true;
-   features->descriptorBindingStorageBufferUpdateAfterBind      = true;
-   features->descriptorBindingUniformTexelBufferUpdateAfterBind = true;
-   features->descriptorBindingStorageTexelBufferUpdateAfterBind = true;
-   features->descriptorBindingUpdateUnusedWhilePending          = true;
-   features->descriptorBindingPartiallyBound                    = true;
-   features->descriptorBindingVariableDescriptorCount           = true;
-   features->runtimeDescriptorArray                             = true;
+   features->shaderUniformTexelBufferArrayNonUniformIndexing    = !is_a5xx;
+   features->shaderStorageTexelBufferArrayNonUniformIndexing    = !is_a5xx;
+   features->descriptorBindingUniformBufferUpdateAfterBind      = !is_a5xx;
+   features->descriptorBindingSampledImageUpdateAfterBind       = !is_a5xx;
+   features->descriptorBindingStorageImageUpdateAfterBind       = !is_a5xx;
+   features->descriptorBindingStorageBufferUpdateAfterBind      = !is_a5xx;
+   features->descriptorBindingUniformTexelBufferUpdateAfterBind = !is_a5xx;
+   features->descriptorBindingStorageTexelBufferUpdateAfterBind = !is_a5xx;
+   features->descriptorBindingUpdateUnusedWhilePending          = !is_a5xx;
+   features->descriptorBindingPartiallyBound                    = !is_a5xx;
+   features->descriptorBindingVariableDescriptorCount           = !is_a5xx;
+   features->runtimeDescriptorArray                             = !is_a5xx;
 
    features->samplerFilterMinmax                 =
       pdevice->info->props.has_sampler_minmax;
@@ -680,20 +578,20 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->separateDepthStencilLayouts         = true;
    features->hostQueryReset                      = true;
    features->timelineSemaphore                   = true;
-   features->bufferDeviceAddress                 = true;
-   features->bufferDeviceAddressCaptureReplay    = pdevice->has_set_iova;
+   features->bufferDeviceAddress                 = !is_a5xx;
+   features->bufferDeviceAddressCaptureReplay    = !is_a5xx && pdevice->has_set_iova;
    features->bufferDeviceAddressMultiDevice      = false;
    features->vulkanMemoryModel                   = true;
    features->vulkanMemoryModelDeviceScope        = true;
    features->vulkanMemoryModelAvailabilityVisibilityChains = true;
-   features->shaderOutputViewportIndex           = true;
-   features->shaderOutputLayer                   = true;
-   features->subgroupBroadcastDynamicId          = true;
+   features->shaderOutputViewportIndex           = pdevice->info->props.has_hw_multiview;
+   features->shaderOutputLayer                   = pdevice->info->props.has_hw_multiview;
+   features->subgroupBroadcastDynamicId          = !is_a5xx;
 
    /* Vulkan 1.3 */
    features->robustImageAccess                   = true;
    features->inlineUniformBlock                  = true;
-   features->descriptorBindingInlineUniformBlockUpdateAfterBind = true;
+   features->descriptorBindingInlineUniformBlockUpdateAfterBind = !is_a5xx;
    features->pipelineCreationCacheControl        = true;
    features->privateData                         = true;
    features->shaderDemoteToHelperInvocation      = true;
@@ -711,16 +609,16 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->pushDescriptor = true;
 
    /* VK_KHR_acceleration_structure */
-   features->accelerationStructure = true;
-   features->accelerationStructureCaptureReplay = pdevice->has_set_iova;
-   features->descriptorBindingAccelerationStructureUpdateAfterBind = true;
+   features->accelerationStructure = !is_a5xx;
+   features->accelerationStructureCaptureReplay = !is_a5xx && pdevice->has_set_iova;
+   features->descriptorBindingAccelerationStructureUpdateAfterBind = !is_a5xx;
 
    /* VK_KHR_compute_shader_derivatives */
    features->computeDerivativeGroupQuads = pdevice->info->chip >= 7;
    features->computeDerivativeGroupLinear = true;
 
    /* VK_KHR_dynamic_rendering_local_read */
-   features->dynamicRenderingLocalRead = true;
+   features->dynamicRenderingLocalRead = !is_a5xx;
 
    /* VK_KHR_fragment_shading_rate */
    features->pipelineFragmentShadingRate = pdevice->info->props.has_attachment_shading_rate;
@@ -772,8 +670,8 @@ tu_get_features(struct tu_physical_device *pdevice,
 #endif
 
    /* VK_KHR_shader_clock */
-   features->shaderSubgroupClock = true;
-   features->shaderDeviceClock = true;
+   features->shaderSubgroupClock = !is_a5xx;
+   features->shaderDeviceClock = !is_a5xx;
 
    /* VK_KHR_shader_expect_assume */
    features->shaderExpectAssume = true;
@@ -788,7 +686,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderQuadControl = pdevice->info->props.has_getfiberid;
 
    /* VK_KHR_shader_subgroup_uniform_control_flow */
-   features->shaderSubgroupUniformControlFlow = true;
+   features->shaderSubgroupUniformControlFlow = !is_a5xx;
 
    /* VK_KHR_vertex_attribute_divisor */
    features->vertexAttributeInstanceRateDivisor = true;
@@ -818,8 +716,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->colorWriteEnable = true;
 
    /* VK_EXT_conditional_rendering */
-   features->conditionalRendering = true;
-   features->inheritedConditionalRendering = true;
+   features->conditionalRendering = !is_a5xx;
+   features->inheritedConditionalRendering = !is_a5xx;
 
    /* VK_EXT_custom_border_color */
    features->customBorderColors = true;
@@ -838,10 +736,10 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->depthClipEnable = true;
 
    /* VK_EXT_descriptor_buffer */
-   features->descriptorBuffer = true;
-   features->descriptorBufferCaptureReplay = pdevice->has_set_iova;
-   features->descriptorBufferImageLayoutIgnored = true;
-   features->descriptorBufferPushDescriptors = true;
+   features->descriptorBuffer = !is_a5xx;
+   features->descriptorBufferCaptureReplay = !is_a5xx && pdevice->has_set_iova;
+   features->descriptorBufferImageLayoutIgnored = !is_a5xx;
+   features->descriptorBufferPushDescriptors = !is_a5xx;
 
    /* VK_EXT_device_address_binding_report */
    features->reportAddressBinding = true;
@@ -855,11 +753,13 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* VK_EXT_extended_dynamic_state2 */
    features->extendedDynamicState2 = true;
    features->extendedDynamicState2LogicOp = true;
-   features->extendedDynamicState2PatchControlPoints = !pdevice->info->props.is_a702;
+   features->extendedDynamicState2PatchControlPoints =
+      !is_a5xx && !pdevice->info->props.is_a702;
 
    /* VK_EXT_extended_dynamic_state3 */
    features->extendedDynamicState3PolygonMode = true;
-   features->extendedDynamicState3TessellationDomainOrigin = !pdevice->info->props.is_a702;
+   features->extendedDynamicState3TessellationDomainOrigin =
+      !is_a5xx && !pdevice->info->props.is_a702;
    features->extendedDynamicState3DepthClampEnable = true;
    features->extendedDynamicState3DepthClipEnable = true;
    features->extendedDynamicState3LogicOpEnable = true;
@@ -868,7 +768,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->extendedDynamicState3AlphaToCoverageEnable = true;
    features->extendedDynamicState3AlphaToOneEnable = true;
    features->extendedDynamicState3DepthClipNegativeOneToOne = true;
-   features->extendedDynamicState3RasterizationStream = !pdevice->info->props.is_a702;
+   features->extendedDynamicState3RasterizationStream =
+      !is_a5xx && !pdevice->info->props.is_a702;
    features->extendedDynamicState3ConservativeRasterizationMode =
       pdevice->vk.supported_extensions.EXT_conservative_rasterization;
    features->extendedDynamicState3ExtraPrimitiveOverestimationSize =
@@ -894,9 +795,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->extendedDynamicState3ColorBlendAdvanced = false;
 
    /* VK_EXT_fragment_density_map */
-   features->fragmentDensityMap = true;
+   features->fragmentDensityMap = !is_a5xx;
    features->fragmentDensityMapDynamic = false;
-   features->fragmentDensityMapNonSubsampledImages = true;
+   features->fragmentDensityMapNonSubsampledImages = !is_a5xx;
 
    /* VK_EXT_global_priority_query */
    features->globalPriorityQuery = true;
@@ -924,7 +825,7 @@ tu_get_features(struct tu_physical_device *pdevice,
 #endif
 
    /* VK_EXT_image_view_min_lod */
-   features->minLod = true;
+   features->minLod = !is_a5xx;
 
    /* VK_EXT_legacy_vertex_attributes */
    features->legacyVertexAttributes = true;
@@ -962,7 +863,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->primitiveTopologyPatchListRestart = false;
 
    /* VK_EXT_primitives_generated_query */
-   features->primitivesGeneratedQuery = true;
+   features->primitivesGeneratedQuery = !is_a5xx;
    features->primitivesGeneratedQueryWithRasterizerDiscard = false;
    features->primitivesGeneratedQueryWithNonZeroStreams = false;
 
@@ -970,15 +871,15 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->provokingVertexLast = true;
 
    /* VK_EXT_rasterization_order_attachment_access */
-   features->rasterizationOrderColorAttachmentAccess = true;
-   features->rasterizationOrderDepthAttachmentAccess = true;
-   features->rasterizationOrderStencilAttachmentAccess = true;
+   features->rasterizationOrderColorAttachmentAccess = !is_a5xx;
+   features->rasterizationOrderDepthAttachmentAccess = !is_a5xx;
+   features->rasterizationOrderStencilAttachmentAccess = !is_a5xx;
 
    /* VK_KHR_ray_query */
-   features->rayQuery = true;
+   features->rayQuery = !is_a5xx;
 
    /* VK_KHR_ray_tracing_maintenance1 */
-   features->rayTracingMaintenance1 = true;
+   features->rayTracingMaintenance1 = !is_a5xx;
 
    /* VK_KHR_robustness2 */
    features->robustBufferAccess2 = true;
@@ -1006,7 +907,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderReplicatedComposites = true;
 
    /* VK_EXT_shader_uniform_buffer_unsized_array */
-   features->shaderUniformBufferUnsizedArray = true;
+   features->shaderUniformBufferUnsizedArray = !is_a5xx;
 
 #ifdef TU_USE_WSI_PLATFORM
    /* VK_KHR_swapchain_maintenance1 */
@@ -1023,8 +924,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->texelBufferAlignment = true;
 
    /* VK_EXT_transform_feedback */
-   features->transformFeedback = true;
-   features->geometryStreams = pdevice->info->props.num_xfb_streams > 1;
+   features->transformFeedback = !is_a5xx;
+   features->geometryStreams = !is_a5xx && pdevice->info->props.num_xfb_streams > 1;
 
    /* VK_EXT_vertex_input_dynamic_state */
    features->vertexInputDynamicState = true;
@@ -1033,11 +934,11 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderRelaxedExtendedInstruction = true;
 
    /* VK_KHR_subgroup_rotate */
-   features->shaderSubgroupRotate = true;
-   features->shaderSubgroupRotateClustered = true;
+   features->shaderSubgroupRotate = !is_a5xx;
+   features->shaderSubgroupRotateClustered = !is_a5xx;
 
    /* VK_EXT_fragment_density_map_offset */
-   features->fragmentDensityMapOffset = true;
+   features->fragmentDensityMapOffset = !is_a5xx;
 
    /* VK_KHR_unified_layouts */
    features->unifiedImageLayouts = true;
@@ -1052,22 +953,22 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->textureBlockMatch = pdevice->vk.supported_extensions.QCOM_image_processing;
 
    /* VK_VALVE_fragment_density_map_layered */
-   features->fragmentDensityMapLayered = true;
+   features->fragmentDensityMapLayered = !is_a5xx;
 
    /* VK_EXT_dynamic_rendering_unused_attachments */
    features->dynamicRenderingUnusedAttachments = true;
 
    /* VK_EXT_multisampled_render_to_single_sampled */
-   features->multisampledRenderToSingleSampled = true;
+   features->multisampledRenderToSingleSampled = !is_a5xx;
 
    /* VK_EXT_custom_resolve */
-   features->customResolve = true;
+   features->customResolve = !is_a5xx;
 
    /* QCOM_multiview_per_view_viewports */
-   features->multiviewPerViewViewports = true;
+   features->multiviewPerViewViewports = !is_a5xx;
 
    /* QCOM_multiview_per_view_render_areas */
-   features->multiviewPerViewRenderAreas = true;
+   features->multiviewPerViewRenderAreas = !is_a5xx;
 
 #ifdef TU_USE_WSI_PLATFORM
    /* VK_EXT_present_timing */
@@ -1077,7 +978,7 @@ tu_get_features(struct tu_physical_device *pdevice,
 #endif
 
    /* VALVE_buffer_device_address_allocation_alignment */
-   features->bufferDeviceAddressAllocationAlignment = true;
+   features->bufferDeviceAddressAllocationAlignment = !is_a5xx;
 }
 
 static void
@@ -1455,8 +1356,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
 
    props->apiVersion =
       ((pdevice->info->chip >= 7) ? TU_API_VERSION :
-       (pdevice->info->chip == 6) ? VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION) :
-                                    VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION));
+                                    VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION));
    props->driverVersion = vk_get_driver_version();
    props->vendorID = pdevice->instance->drirc.debug.force_vk_vendor != 0 ?
                      pdevice->instance->drirc.debug.force_vk_vendor : 0x5143;

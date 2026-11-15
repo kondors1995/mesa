@@ -1381,6 +1381,7 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
       if (id == TU_DRAW_STATE_VS_BINNING ||
           id == TU_DRAW_STATE_GS_BINNING ||
           id == TU_DRAW_STATE_INPUT_ATTACHMENTS_GMEM ||
+          id == TU_DRAW_STATE_INPUT_ATTACHMENTS_SYSMEM ||
           id == TU_DRAW_STATE_PRIM_MODE_GMEM ||
           !state.size || !state.iova)
          enable_mask |= CP_SET_DRAW_STATE__0_DISABLE;
@@ -2967,6 +2968,9 @@ tu_emit_input_attachments(struct tu_cmd_buffer *cmd,
     * in the pair
     * TODO: a smarter workaround
     */
+
+   if (CHIP == A5XX)
+      return (struct tu_draw_state) {};
 
    if (!subpass->input_count)
       return (struct tu_draw_state) {};
@@ -9751,8 +9755,16 @@ tu_sw_multiview_draw(VkCommandBuffer commandBuffer, Args... args)
 
    assert(!cmd->state.sw_multiview);
    cmd->state.sw_multiview = true;
+   const bool is_a5xx = cmd->device->physical_device->info->chip == 5;
    u_foreach_bit(view, view_mask) {
       cmd->state.sw_view_index = view;
+      /* A5xx sysmem draws lack VS gl_Layer routing via VPC_VS_SIV_CNTL, so
+       * re-target RB MRT/depth/stencil base addresses to the active view slice.
+       */
+      if (is_a5xx && cmd->state.subpass && cmd->state.attachments) {
+         tu5_emit_zs(cmd, cmd->state.subpass, &cmd->draw_cs);
+         tu5_emit_mrt(cmd, cmd->state.subpass, &cmd->draw_cs);
+      }
       DRAW(commandBuffer, args...);
    }
    cmd->state.sw_multiview = false;

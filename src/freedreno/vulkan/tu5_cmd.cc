@@ -1222,12 +1222,13 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
       &cmd->state.pass->attachments[a];
    enum a5xx_depth_format fmt =
       (enum a5xx_depth_format) tu5_pipe2depth(vk_format_to_pipe_format(attachment->format));
+   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : 0;
    const struct fdl6_view *depth_view = tu_image_view_fdl_view(iview, false);
    const struct fdl6_view *stencil_view = tu_image_view_fdl_view(iview, true);
 
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_BUFFER_INFO, 5);
    tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_INFO_DEPTH_FORMAT(fmt));
-   tu_cs_emit_qw(cs, tu_layer_address(depth_view, 0));
+   tu_cs_emit_qw(cs, tu_layer_address(depth_view, layer));
    tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_PITCH(depth_view->pitch));
    tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_ARRAY_PITCH(depth_view->layer_size));
 
@@ -1242,7 +1243,7 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
        attachment->format == VK_FORMAT_S8_UINT) {
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_STENCIL_INFO, 5);
       tu_cs_emit(cs, A5XX_RB_STENCIL_INFO_SEPARATE_STENCIL);
-      tu_cs_emit_qw(cs, tu_layer_address(stencil_view, 0));
+      tu_cs_emit_qw(cs, tu_layer_address(stencil_view, layer));
       tu_cs_emit(cs, A5XX_RB_STENCIL_PITCH(stencil_view->pitch));
       tu_cs_emit(cs, A5XX_RB_STENCIL_ARRAY_PITCH(stencil_view->layer_size));
    } else {
@@ -1256,6 +1257,7 @@ tu5_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
              struct tu_cs *cs)
 {
+   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : 0;
    const bool dither = subpass->legacy_dithering_enabled;
    uint32_t written = 0;
 
@@ -1275,7 +1277,7 @@ tu5_emit_mrt(struct tu_cmd_buffer *cmd,
       tu_cs_emit(cs, buf_info);
       tu_cs_emit(cs, A5XX_RB_MRT_PITCH(iview->view.pitch));
       tu_cs_emit(cs, A5XX_RB_MRT_ARRAY_PITCH(iview->view.layer_size));
-      tu_cs_emit_qw(cs, tu_layer_address(&iview->view, 0));
+      tu_cs_emit_qw(cs, tu_layer_address(&iview->view, layer));
 
       tu_cs_emit_pkt4(cs, REG_A5XX_SP_FS_MRT_REG(remapped), 1);
       tu_cs_emit(cs, iview->view.SP_PS_MRT_REG);

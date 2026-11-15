@@ -115,7 +115,10 @@ tu5_sampler_init(struct tu_sampler *sampler,
    if (pCreateInfo->flags & VK_SAMPLER_CREATE_NON_SEAMLESS_CUBE_MAP_BIT_EXT)
       sampler->descriptor[1] |= A5XX_TEX_SAMP_1_CUBEMAPSEAMLESSFILTOFF;
 
-   sampler->descriptor[2] = A5XX_TEX_SAMP_2_BCOLOR_OFFSET(border_color);
+   sampler->descriptor[2] =
+      A5XX_TEX_SAMP_2_REDUCTION_MODE(
+         (enum a5xx_reduction_mode) tu6_reduction_mode(sampler->vk.reduction_mode)) |
+      A5XX_TEX_SAMP_2_BCOLOR_OFFSET(border_color);
    sampler->descriptor[3] = 0;
 }
 

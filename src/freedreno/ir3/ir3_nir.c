@@ -1992,8 +1992,10 @@ ir3_alloc_driver_params(struct ir3_const_allocations *const_alloc,
       upload_unit = compiler->const_upload_unit;
    }
 
-   /* offset cannot be 0 for vs params loaded by CP_DRAW_INDIRECT_MULTI */
-   if (shader_stage == MESA_SHADER_VERTEX && compiler->gen >= 6)
+   /* offset cannot be 0 for vs params (Turnip uses 0 as "disabled" sentinel,
+    * and CP_DRAW_INDIRECT_MULTI on A6xx+ overwrites DST_OFF)
+    */
+   if (shader_stage == MESA_SHADER_VERTEX && compiler->gen >= 5)
       const_alloc->max_const_offset_vec4 =
          MAX2(const_alloc->max_const_offset_vec4, 1);
 

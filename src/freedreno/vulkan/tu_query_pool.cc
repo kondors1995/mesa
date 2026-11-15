@@ -1544,14 +1544,6 @@ emit_end_occlusion_query(struct tu_cmd_buffer *cmdbuf,
 
    if (CHIP == A5XX) {
       tu5_emit_sample_counter_cntl(cs);
-      tu5_emit_sample_counter_addr(cs, begin_iova);
-      tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-      tu_cs_emit(cs, ZPASS_DONE);
-      return;
-   }
-
-   if (CHIP == A5XX) {
-      tu5_emit_sample_counter_cntl(cs);
       tu5_emit_sample_counter_addr(cs, end_iova);
       tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
       tu_cs_emit(cs, ZPASS_DONE);
