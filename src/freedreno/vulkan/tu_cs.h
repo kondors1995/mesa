@@ -677,6 +677,42 @@ tu_cond_exec_end(struct tu_cs *cs)
    }
 }
 
+/* Helpers for bracketing commands on A5xx with CP_COND_EXEC testing a
+ * GPU-written boolean flag (0 = skip, 1 = execute) since A5xx lacks
+ * CP_COND_REG_EXEC and CP_SET_DRAW_STATE mode masks.
+ */
+static inline void
+tu5_cond_exec_start(struct tu_cs *cs, uint64_t bool_iova)
+{
+   assert(cs->cond_stack_depth < TU_COND_EXEC_STACK_SIZE);
+
+   tu_cs_emit_pkt7(cs, CP_COND_EXEC, 6);
+   tu_cs_emit_qw(cs, bool_iova); /* BOOL_ADDR */
+   tu_cs_emit_qw(cs, bool_iova); /* TIMESTAMP_ADDR */
+   tu_cs_emit(cs, 2);            /* ACTIVE_TIMESTAMP: (2 - 1) < 0x80000000 */
+
+   cs->cond_flags[cs->cond_stack_depth] = 0;
+   cs->cond_dwords[cs->cond_stack_depth] = cs->cur;
+   tu_cs_emit(cs, 0);
+
+   cs->cond_stack_depth++;
+}
+
+static inline void
+tu5_cond_exec_end(struct tu_cs *cs)
+{
+   assert(cs->cond_stack_depth > 0);
+   cs->cond_stack_depth--;
+
+   uint32_t cond_len = cs->cur - cs->cond_dwords[cs->cond_stack_depth] - 1;
+   if (cond_len) {
+      *cs->cond_dwords[cs->cond_stack_depth] = cond_len;
+   } else {
+      /* rewind the CS to drop the empty CP_COND_EXEC packet (header + 6). */
+      cs->cur = cs->cur - 7;
+   }
+}
+
 static inline void
 tu7_thread_control(struct tu_cs *cs, enum cp_thread thread)
 {

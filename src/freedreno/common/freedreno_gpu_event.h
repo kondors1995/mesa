@@ -93,7 +93,7 @@ constexpr inline struct fd_gpu_event_info fd_gpu_events<chip_range(CHIP == A5XX)
     {DEBUG_LABEL, false},             /* FD_LRZ_INVALIDATE */
     {VSC_BINNING_START, false},       /* FD_VSC_BINNING_START */
     {VSC_BINNING_END, false},         /* FD_VSC_BINNING_END */
-    {CCU_RESOLVE, false},             /* FD_CCU_RESOLVE */
+    {CCU_RESOLVE, true},              /* FD_CCU_RESOLVE */
     {DEBUG_LABEL, false},             /* FD_LABEL */
 };
 

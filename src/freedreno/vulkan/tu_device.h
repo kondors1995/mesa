@@ -244,6 +244,12 @@ struct tu6_global
 
    volatile uint32_t vtx_stats_query_not_running;
 
+   /* A5xx runtime render-mode flags updated via CP_MEM_WRITE and tested by
+    * CP_COND_EXEC inside draw_cs when choosing GMEM vs sysmem execution.
+    */
+   uint32_t a5xx_gmem_mode;
+   uint32_t a5xx_sysmem_mode;
+
    /* A fence with a monotonically increasing value that is
     * incremented by the GPU on each submission that includes
     * a tu_autotune::submission_entry CS. This is used to track

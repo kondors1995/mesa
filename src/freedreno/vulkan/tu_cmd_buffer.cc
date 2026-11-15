@@ -3999,7 +3999,8 @@ tu6_tile_render_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
       tu_cs_emit(cs, 0); /* value */
    }
 
-   tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_CLEAN_BLIT_CACHE);
+   if constexpr (CHIP >= A6XX)
+      tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_CLEAN_BLIT_CACHE);
 
    cmd->device->autotune->end_renderpass(cmd, cs, rp_ctx);
 
@@ -7028,7 +7029,7 @@ tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd, struct tu_resolve_group *r
     * TODO: why is this not necessary between the end of one tile and the
     * start of another?
     */
-   if (subpass_idx != 0) {
+   if (CHIP != A5XX && subpass_idx != 0) {
       tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_CLEAN_BLIT_CACHE);
    }
 
