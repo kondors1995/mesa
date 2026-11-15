@@ -418,8 +418,12 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_INVALIDATE_DEPTH);
    if (flushes & TU_CMD_FLAG_CACHE_CLEAN)
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_CLEAN);
-   if (flushes & TU_CMD_FLAG_CACHE_INVALIDATE)
+   bool a5xx_wfi_emitted = false;
+   if (flushes & TU_CMD_FLAG_CACHE_INVALIDATE) {
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
+      if constexpr (CHIP == A5XX)
+         a5xx_wfi_emitted = true;
+   }
    if (CHIP >= A6XX && (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE)) {
       if (CHIP < A8XX) {
          tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
@@ -468,19 +472,19 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    if (CHIP == A7XX && (flushes & TU_CMD_FLAG_RTU_INVALIDATE) &&
        cmd_buffer->device->physical_device->info->props.has_rt_workaround)
       tu_emit_rt_workaround<CHIP>(cmd_buffer, cs);
-   if (flushes & TU_CMD_FLAG_WAIT_MEM_WRITES)
+   if (flushes & TU_CMD_FLAG_WAIT_MEM_WRITES) {
       tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+      a5xx_wfi_emitted = false;
+   }
    if (emit_subpass_slice_fence) {
-      if (CHIP == A5XX) {
-         if (emit_cache_invalidate_gmem)
+      if constexpr (CHIP == A5XX) {
+         if (emit_cache_invalidate_gmem) {
             tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
-         if (emit_subpass_slice_wait)
+            a5xx_wfi_emitted = true;
+         } else if (emit_subpass_slice_wait && !a5xx_wfi_emitted) {
             tu_cs_emit_wfi(cs);
-      } else if constexpr (CHIP == A5XX) {
-         if (emit_cache_invalidate_gmem)
-            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
-         if (emit_subpass_slice_wait)
-            tu_cs_emit_wfi(cs);
+            a5xx_wfi_emitted = true;
+         }
       } else {
          /* Emit the stronger flushes in sysmem mode. We need this from
           * experimentation.
@@ -502,7 +506,7 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
          }
       }
    }
-   if (flushes & TU_CMD_FLAG_WAIT_FOR_IDLE)
+   if ((flushes & TU_CMD_FLAG_WAIT_FOR_IDLE) && !a5xx_wfi_emitted)
       tu_cs_emit_wfi(cs);
    if (flushes & TU_CMD_FLAG_WAIT_FOR_ME)
       tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
