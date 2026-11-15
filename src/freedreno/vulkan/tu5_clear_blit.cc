@@ -1160,9 +1160,8 @@ tu5_store_gmem_attachment(struct tu_cmd_buffer *cmd,
          return;
       if (dst->clear_mask)
          return;
-      bool store_color = !vk_format_is_depth_or_stencil(src->format);
-      if (store_color && src->will_be_resolved && a == gmem_a)
-         return;
+      assert(!(src->format == VK_FORMAT_D24_UNORM_S8_UINT &&
+               dst->format == VK_FORMAT_S8_UINT));
    }
 
    const uint32_t tile_w = cmd->state.tiling->tile0.width;

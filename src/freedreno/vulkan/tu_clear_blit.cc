@@ -6350,6 +6350,9 @@ tu_choose_gmem_layout(struct tu_cmd_buffer *cmd)
                subpass->color_attachments[j].attachment;
          if (tu_attachment_store_mismatched_mutability(cmd, a, gmem_a))
             cmd->state.gmem_layout = TU_GMEM_LAYOUT_AVOID_CCU;
+         if (cmd->state.pass->attachments[gmem_a].format == VK_FORMAT_D24_UNORM_S8_UINT &&
+             cmd->state.pass->attachments[a].format == VK_FORMAT_S8_UINT)
+            cmd->state.gmem_layout = TU_GMEM_LAYOUT_AVOID_CCU;
       }
    }
 
