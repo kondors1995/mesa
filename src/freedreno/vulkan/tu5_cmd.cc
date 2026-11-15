@@ -1274,7 +1274,8 @@ void
 tu5_emit_zs(struct tu_cmd_buffer *cmd,
             const struct tu_subpass *subpass,
             struct tu_cs *cs,
-            bool gmem)
+            bool gmem,
+            uint32_t layer_override)
 {
    const uint32_t a = subpass->depth_stencil_attachment.attachment;
    if (a == VK_ATTACHMENT_UNUSED) {
@@ -1301,7 +1302,7 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
       &cmd->state.pass->attachments[a];
    enum a5xx_depth_format fmt =
       (enum a5xx_depth_format) tu5_pipe2depth(vk_format_to_pipe_format(attachment->format));
-   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : 0;
+   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : layer_override;
    const struct fdl6_view *depth_view = tu_image_view_fdl_view(iview, false);
    const struct fdl6_view *stencil_view = tu_image_view_fdl_view(iview, true);
 
@@ -1371,9 +1372,10 @@ void
 tu5_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
              struct tu_cs *cs,
-             bool gmem)
+             bool gmem,
+             uint32_t layer_override)
 {
-   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : 0;
+   const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : layer_override;
    const bool dither = subpass->legacy_dithering_enabled;
    uint32_t written = 0;
 

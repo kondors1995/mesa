@@ -1107,13 +1107,15 @@ void
 tu5_emit_zs(struct tu_cmd_buffer *cmd,
             const struct tu_subpass *subpass,
             struct tu_cs *cs,
-            bool gmem = false);
+            bool gmem = false,
+            uint32_t layer_override = 0);
 
 void
 tu5_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
              struct tu_cs *cs,
-             bool gmem = false);
+             bool gmem = false,
+             uint32_t layer_override = 0);
 
 void
 tu5_emit_bin_size(struct tu_cs *cs,

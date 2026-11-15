@@ -1006,7 +1006,6 @@ tu5_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
       att->format == VK_FORMAT_D32_SFLOAT ||
       att->format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
       att->format == VK_FORMAT_S8_UINT ||
-      cmd->state.framebuffer->layers > 1 ||
       per_layer_render_area;
 
    const VkClearValue *att_clear = &cmd->state.clear_values[a];
@@ -1023,77 +1022,81 @@ tu5_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
 
       enum a5xx_blit_buf buf;
       uint32_t clear_mask = 0xf;
-      if (vk_format_is_depth_or_stencil(att->format)) {
-         enum a5xx_depth_format dfmt = (enum a5xx_depth_format)
+      bool is_zs = vk_format_is_depth_or_stencil(att->format);
+      enum a5xx_depth_format dfmt = DEPTH5_NONE;
+      uint32_t zs_pitch = 0, zs_layer_size = 0;
+      uint32_t mrt_buf_info = 0, mrt_pitch = 0, mrt_layer_size = 0;
+      if (is_zs) {
+         dfmt = (enum a5xx_depth_format)
             tu5_pipe2depth(vk_format_to_pipe_format(att->format));
-         uint32_t pitch = tiling->tile0.width * att->cpp;
-         uint32_t layer_size = pitch * tiling->tile0.height;
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_BUFFER_INFO, 5);
-         tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_INFO_DEPTH_FORMAT(dfmt));
-         tu_cs_emit_qw(cs, tu_attachment_gmem_offset(cmd, att, 0));
-         tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_PITCH(pitch));
-         tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_ARRAY_PITCH(layer_size));
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_SU_DEPTH_BUFFER_INFO, 1);
-         tu_cs_emit(cs, A5XX_GRAS_SU_DEPTH_BUFFER_INFO_DEPTH_FORMAT(dfmt));
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_FLAG_BUFFER_BASE, 3);
-         tu_cs_emit_qw(cs, 0);
-         tu_cs_emit(cs, 0);
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_RB_STENCIL_INFO, 1);
-         tu_cs_emit(cs, 0);
-
+         zs_pitch = tiling->tile0.width * att->cpp;
+         zs_layer_size = zs_pitch * tiling->tile0.height;
          buf = BLIT_ZS;
          clear_mask =
             ((att->clear_mask & VK_IMAGE_ASPECT_DEPTH_BIT) ? 0x1 : 0) |
             ((att->clear_mask & VK_IMAGE_ASPECT_STENCIL_BIT) ? 0x2 : 0);
       } else {
-         uint32_t buf_info = iview->view.RB_MRT_BUF_INFO;
-         buf_info &= ~A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE__MASK;
-         buf_info |= A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(TILE5_2) | 0x800;
-         uint32_t pitch = tiling->tile0.width * att->cpp;
-         uint32_t layer_size = pitch * tiling->tile0.height;
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_RB_MRT_BUF_INFO(0), 5);
-         tu_cs_emit(cs, buf_info);
-         tu_cs_emit(cs, A5XX_RB_MRT_PITCH(pitch));
-         tu_cs_emit(cs, A5XX_RB_MRT_ARRAY_PITCH(layer_size));
-         tu_cs_emit_qw(cs, tu_attachment_gmem_offset(cmd, att, 0));
-
-         tu_cs_emit_pkt4(cs, REG_A5XX_RB_MRT_FLAG_BUFFER_ADDR(0), 4);
-         tu_cs_emit_qw(cs, 0);
-         tu_cs_emit(cs, 0);
-         tu_cs_emit(cs, 0);
-
+         mrt_buf_info = iview->view.RB_MRT_BUF_INFO;
+         mrt_buf_info &= ~A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE__MASK;
+         mrt_buf_info |= A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(TILE5_2) | 0x800;
+         mrt_pitch = tiling->tile0.width * att->cpp;
+         mrt_layer_size = mrt_pitch * tiling->tile0.height;
          buf = BLIT_MRT0;
       }
 
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_BLIT_CNTL, 1);
       tu_cs_emit(cs, A5XX_RB_BLIT_CNTL_BUF(buf));
 
-      tu_cs_emit_pkt4(cs, REG_A5XX_RB_CLEAR_CNTL, 1);
-      tu_cs_emit(cs, A5XX_RB_CLEAR_CNTL_FAST_CLEAR |
-                     A5XX_RB_CLEAR_CNTL_MASK(clear_mask));
+      for_each_layer (i, att->used_views, cmd->state.framebuffer->layers) {
+         if (is_zs) {
+            tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_BUFFER_INFO, 5);
+            tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_INFO_DEPTH_FORMAT(dfmt));
+            tu_cs_emit_qw(cs, tu_attachment_gmem_offset(cmd, att, i));
+            tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_PITCH(zs_pitch));
+            tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_ARRAY_PITCH(zs_layer_size));
 
-      tu_cs_emit_pkt4(cs, REG_A5XX_RB_CLEAR_COLOR_DW0, 4);
-      tu_cs_emit_array(cs, clear_vals, 4);
+            tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_SU_DEPTH_BUFFER_INFO, 1);
+            tu_cs_emit(cs, A5XX_GRAS_SU_DEPTH_BUFFER_INFO_DEPTH_FORMAT(dfmt));
 
-      tu_emit_event_write<A5XX>(cmd, cs, FD_CCU_RESOLVE);
+            tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_FLAG_BUFFER_BASE, 3);
+            tu_cs_emit_qw(cs, 0);
+            tu_cs_emit(cs, 0);
+
+            tu_cs_emit_pkt4(cs, REG_A5XX_RB_STENCIL_INFO, 1);
+            tu_cs_emit(cs, 0);
+         } else {
+            tu_cs_emit_pkt4(cs, REG_A5XX_RB_MRT_BUF_INFO(0), 5);
+            tu_cs_emit(cs, mrt_buf_info);
+            tu_cs_emit(cs, A5XX_RB_MRT_PITCH(mrt_pitch));
+            tu_cs_emit(cs, A5XX_RB_MRT_ARRAY_PITCH(mrt_layer_size));
+            tu_cs_emit_qw(cs, tu_attachment_gmem_offset(cmd, att, i));
+
+            tu_cs_emit_pkt4(cs, REG_A5XX_RB_MRT_FLAG_BUFFER_ADDR(0), 4);
+            tu_cs_emit_qw(cs, 0);
+            tu_cs_emit(cs, 0);
+            tu_cs_emit(cs, 0);
+         }
+
+         tu_cs_emit_pkt4(cs, REG_A5XX_RB_CLEAR_CNTL, 1);
+         tu_cs_emit(cs, A5XX_RB_CLEAR_CNTL_FAST_CLEAR |
+                        A5XX_RB_CLEAR_CNTL_MASK(clear_mask));
+
+         tu_cs_emit_pkt4(cs, REG_A5XX_RB_CLEAR_COLOR_DW0, 4);
+         tu_cs_emit_array(cs, clear_vals, 4);
+
+         tu_emit_event_write<A5XX>(cmd, cs, FD_CCU_RESOLVE);
+      }
 
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_CLEAR_CNTL, 1);
       tu_cs_emit(cs, 0);
       return;
    }
 
-   /* Fallback to 3D clear draw for Z32 / D32S8 / S8, layered FBs, or
-    * per-layer render areas: bind GMEM targets and render clipped rects.
+   /* Fallback to 3D clear draw for Z32 / D32S8 / S8 or per-layer render areas:
+    * bind each layer's GMEM target and render clipped rects.
     */
    tu5_emit_bin_size(cs, tiling->tile0.width, tiling->tile0.height, false);
    tu5_emit_render_cntl(cmd, subpass, cs, false);
-   tu5_emit_zs(cmd, subpass, cs, true);
-   tu5_emit_mrt(cmd, subpass, cs, true);
 
    uint32_t clear_value[MAX_RTS][4] = {};
    uint32_t clear_rts = 0, clear_components = 0;
@@ -1127,9 +1130,12 @@ tu5_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
    }
 
    for_each_layer (i, att->used_views, cmd->state.framebuffer->layers) {
+      tu5_emit_zs(cmd, subpass, cs, true, i);
+      tu5_emit_mrt(cmd, subpass, cs, true, i);
+
       VkClearRect rect = {
          .rect = cmd->state.render_areas[per_layer_render_area ? i : 0],
-         .baseArrayLayer = i,
+         .baseArrayLayer = 0,
          .layerCount = 1,
       };
       tu5_r3d_clear_rects(cmd, cs, clear_rts, clear_components, clear_value,
