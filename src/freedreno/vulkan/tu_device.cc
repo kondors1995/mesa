@@ -408,7 +408,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_shader_subgroup_ballot =
          device->info->props.has_getfiberid && tu_subgroup_size(device) <= 64,
       .EXT_shader_subgroup_vote = device->info->props.has_getfiberid,
-      .EXT_shader_uniform_buffer_unsized_array = !is_a5xx,
+      .EXT_shader_uniform_buffer_unsized_array = true,
       .EXT_shader_viewport_index_layer = device->info->props.has_hw_multiview,
       .EXT_subgroup_size_control = true,
 #ifdef TU_USE_WSI_PLATFORM
@@ -909,7 +909,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderReplicatedComposites = true;
 
    /* VK_EXT_shader_uniform_buffer_unsized_array */
-   features->shaderUniformBufferUnsizedArray = !is_a5xx;
+   features->shaderUniformBufferUnsizedArray = true;
 
 #ifdef TU_USE_WSI_PLATFORM
    /* VK_KHR_swapchain_maintenance1 */
