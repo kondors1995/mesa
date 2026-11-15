@@ -215,6 +215,8 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
 
       uint64_t va = (descriptors_state->set_iova[ubo->base] & ~0x3full) + ubo->offset;
       uint32_t num_unit = MIN2(ubo->size_vec4, xs->constlen - ubo->const_offset_vec4);
+      if (num_unit == 0)
+         continue;
       if (ubo->push_address) {
          uint32_t addr_dwords[4] = {
             static_cast<uint32_t>(va),
@@ -230,7 +232,7 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
                         CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
                         CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
                         CP_LOAD_STATE4_0_NUM_UNIT(num_unit));
-         tu_cs_emit_qw(cs, va |
+         tu_cs_emit_qw(cs, (va & ~0x3ull) |
                            static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
       }
    }
@@ -332,7 +334,7 @@ tu5_emit_stage_consts(struct tu_cmd_buffer *cmd,
                      CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
                      CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
                      CP_LOAD_STATE4_0_NUM_UNIT(size_vec4));
-      tu_cs_emit_qw(cs, (ubo_vas[ubo_idx] + r->start) |
+      tu_cs_emit_qw(cs, ((ubo_vas[ubo_idx] + r->start) & ~0x3ull) |
                         static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
    }
 
@@ -490,7 +492,7 @@ tu5_emit_stage_tex_and_samp(const struct tu_cmd_buffer *cmd,
    }
 
    const struct ir3_ibo_mapping *m = &xs->image_mapping;
-   for (uint32_t i = 0; i < b->num_image; i++) {
+   for (uint32_t i = 0; i < b->num_image && i < ARRAY_SIZE(m->image_to_tex); i++) {
       if (m->image_to_tex[i] == UAV_INVALID)
          continue;
 
@@ -633,11 +635,12 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
       cs = &cmd->cs;
    }
 
-   tu_cs_emit_pkt4(cs, REG_A5XX_TPL1_TP_BORDER_COLOR_BASE_ADDR, 2);
-   tu_cs_emit_qw(cs, cmd->device->global_bo->iova + gb_offset(bcolor_builtin));
-
    if (compute) {
       struct tu_shader *shader = cmd->state.shaders[MESA_SHADER_COMPUTE];
+      if (shader && shader->tu5_bindings && shader->tu5_bindings->num_samp > 0) {
+         tu_cs_emit_pkt4(cs, REG_A5XX_TPL1_TP_BORDER_COLOR_BASE_ADDR, 2);
+         tu_cs_emit_qw(cs, cmd->device->global_bo->iova + gb_offset(bcolor_builtin));
+      }
       tu5_emit_stage_tex_and_samp(cmd, cs, shader, MESA_SHADER_COMPUTE, true,
                                   descriptors_state);
 
@@ -657,6 +660,12 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
 
    struct tu_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+
+   if ((vs && vs->tu5_bindings && vs->tu5_bindings->num_samp > 0) ||
+       (fs && fs->tu5_bindings && fs->tu5_bindings->num_samp > 0)) {
+      tu_cs_emit_pkt4(cs, REG_A5XX_TPL1_TP_BORDER_COLOR_BASE_ADDR, 2);
+      tu_cs_emit_qw(cs, cmd->device->global_bo->iova + gb_offset(bcolor_builtin));
+   }
 
    tu5_emit_stage_tex_and_samp(cmd, cs, vs, MESA_SHADER_VERTEX, false,
                                descriptors_state);

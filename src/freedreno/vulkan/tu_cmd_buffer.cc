@@ -5034,9 +5034,27 @@ tu_bind_descriptor_sets(struct tu_cmd_buffer *cmd,
       descriptors_state->set_iova[idx] = set ?
          (set->va | BINDLESS_DESCRIPTOR_64B) : 0;
 
-      if (CHIP == A5XX ||
-          cmd->device->physical_device->compiler_options.enable_ssbo_emulation)
-         cmd->state.dirty |= TU_CMD_DIRTY_SHADER_CONSTS;
+      if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS &&
+          (CHIP == A5XX ||
+           cmd->device->physical_device->compiler_options.enable_ssbo_emulation)) {
+         /* On A5XX, UBO pointers, UBO push ranges, and image_dims live in
+          * graphics TU_DRAW_STATE_CONST; only dirty it when an active graphics
+          * shader references set idx (or no graphics shaders are bound yet).
+          */
+         bool has_gfx_shader = false;
+         bool need_consts = false;
+         for (uint32_t s = 0; s < ARRAY_SIZE(cmd->state.shaders); s++) {
+            if (s != MESA_SHADER_COMPUTE && cmd->state.shaders[s]) {
+               has_gfx_shader = true;
+               if (cmd->state.shaders[s]->active_desc_sets & (1u << idx)) {
+                  need_consts = true;
+                  break;
+               }
+            }
+         }
+         if (!has_gfx_shader || need_consts)
+            cmd->state.dirty |= TU_CMD_DIRTY_SHADER_CONSTS;
+      }
 
       if (!set)
          continue;
