@@ -1395,6 +1395,58 @@ r3d_coords(struct tu_cmd_buffer *cmd,
 }
 
 static void
+r3d_coords_rotated(struct tu_cmd_buffer *cmd,
+                   struct tu_cs *cs,
+                   enum a6xx_rotation rot,
+                   float dst_x0,
+                   float dst_y0,
+                   float dst_x1,
+                   float dst_y1,
+                   float src_x0,
+                   float src_y0,
+                   float src_x1,
+                   float src_y1)
+{
+   float u0 = src_x0, v0 = src_y0;
+   float u1 = src_x1, v1 = src_y1;
+   if (rot == ROTATE_90) {
+      u0 = src_y1;
+      v0 = src_x0;
+      u1 = src_y0;
+      v1 = src_x1;
+   } else if (rot == ROTATE_180) {
+      u0 = src_x1;
+      v0 = src_y1;
+      u1 = src_x0;
+      v1 = src_y0;
+   } else if (rot == ROTATE_270) {
+      u0 = src_y0;
+      v0 = src_x1;
+      u1 = src_y1;
+      v1 = src_x0;
+   }
+   const float coords[] = { dst_x0, dst_y0, u0, v0,
+                            dst_x1, dst_y1, u1, v1 };
+   r3d_coords_raw(cmd, cs, coords);
+}
+
+static void
+r3d_coords_rotated_rect(struct tu_cmd_buffer *cmd,
+                        struct tu_cs *cs,
+                        enum a6xx_rotation rot,
+                        const VkOffset2D dst,
+                        const VkExtent2D dst_extent,
+                        const VkOffset2D src,
+                        const VkExtent2D src_extent)
+{
+   r3d_coords_rotated(cmd, cs, rot,
+                      dst.x, dst.y,
+                      dst.x + dst_extent.width, dst.y + dst_extent.height,
+                      src.x, src.y,
+                      src.x + src_extent.width, src.y + src_extent.height);
+}
+
+static void
 r3d_coords_multi(struct tu_cmd_buffer *cmd,
                  struct tu_cs *cs,
                  const VkRect2D *dst,
@@ -2210,12 +2262,19 @@ buffer_row_coords(const struct blit_ops *ops, struct tu_cmd_buffer *cmd, struct 
       return;
    }
 
-   assert(ops != &r3d_ops<CHIP>);
-
    VkExtent2D img_extent;
    const VkOffset2D origin = tu_rotated_region_origin(rot, offset, extent);
    const VkOffset2D strip = tu_rotated_strip(rot, y, row_x, count, extent.width, extent.height, &img_extent);
    const VkOffset2D img = { origin.x + strip.x, origin.y + strip.y };
+   if (ops == &r3d_ops<CHIP>) {
+      const enum a6xx_rotation r3d_rot = to_image ? rot : tu_rotation_inverse(rot);
+      r3d_coords_rotated_rect(cmd, cs, r3d_rot,
+                              to_image ? img : buf,
+                              to_image ? img_extent : buf_extent,
+                              to_image ? buf : img,
+                              to_image ? buf_extent : img_extent);
+      return;
+   }
    if (to_image)
       r2d_coords_ex<CHIP>(cs, img, img_extent, buf, buf_extent);
    else
@@ -2847,30 +2906,11 @@ tu6_blit_image(struct tu_cmd_buffer *cmd,
       /* for rotated blits the corners get rotated source coords, and the
        * shader swaps them back for 90 and 270
        */
-      const VkOffset3D *src_offsets = info->srcOffsets;
-      float u0 = src_offsets[0].x, v0 = src_offsets[0].y;
-      float u1 = src_offsets[1].x, v1 = src_offsets[1].y;
-      if (copy_rot == ROTATE_90) {
-         u0 = src_offsets[1].y;
-         v0 = src_offsets[0].x;
-         u1 = src_offsets[0].y;
-         v1 = src_offsets[1].x;
-      } else if (copy_rot == ROTATE_180) {
-         u0 = src_offsets[1].x;
-         v0 = src_offsets[1].y;
-         u1 = src_offsets[0].x;
-         v1 = src_offsets[0].y;
-      } else if (copy_rot == ROTATE_270) {
-         u0 = src_offsets[0].y;
-         v0 = src_offsets[1].x;
-         u1 = src_offsets[1].y;
-         v1 = src_offsets[0].x;
-      }
-      const float coords[] = { info->dstOffsets[0].x, info->dstOffsets[0].y,
-                               u0, v0,
-                               info->dstOffsets[1].x, info->dstOffsets[1].y,
-                               u1, v1 };
-      r3d_coords_raw(cmd, cs, coords);
+      r3d_coords_rotated(cmd, cs, copy_rot,
+                         info->dstOffsets[0].x, info->dstOffsets[0].y,
+                         info->dstOffsets[1].x, info->dstOffsets[1].y,
+                         info->srcOffsets[0].x, info->srcOffsets[0].y,
+                         info->srcOffsets[1].x, info->srcOffsets[1].y);
    } else {
       tu_cs_emit_regs(cs,
          GRAS_A2D_DEST_TL(CHIP, .x = MIN2(info->dstOffsets[0].x, info->dstOffsets[1].x),
@@ -3028,13 +3068,16 @@ tu_copy_buffer_to_image(struct tu_cmd_buffer *cmd,
    uint32_t pitch = src_width * block_size;
    uint32_t layer_size = src_height * pitch;
 
-   /* only the 2d path can rotate, a6xx still needs the per-row loop for unaligned buffers */
    const enum a6xx_rotation copy_rot = tu_copy_transform_rotation(info->pNext);
    const VkOffset2D rot_origin = tu_rotated_region_origin(copy_rot, offset, extent);
    VkExtent2D img_extent = { extent.width, extent.height };
    if (copy_rot != ROTATE_0) {
-      blit_param = copy_rot;
-      ops = &r2d_ops<CHIP>;
+      if (CHIP == A5XX) {
+         blit_param = R3D_COPY | (tu_rotation_transposes(copy_rot) ? R3D_SWAP_COORDS : 0);
+      } else {
+         blit_param = copy_rot;
+         ops = &r2d_ops<CHIP>;
+      }
       if (tu_rotation_transposes(copy_rot))
          img_extent = (VkExtent2D) { extent.height, extent.width };
    }
@@ -3099,8 +3142,14 @@ tu_copy_buffer_to_image(struct tu_cmd_buffer *cmd,
                             extent.height, dst_format);
          }
          if (copy_rot != ROTATE_0) {
-            r2d_coords_ex<CHIP>(cs, rot_origin, img_extent, (VkOffset2D) { 0, 0 },
-                                (VkExtent2D) { extent.width, extent.height });
+            if (ops == &r3d_ops<CHIP>) {
+               r3d_coords_rotated_rect(cmd, cs, copy_rot, rot_origin, img_extent,
+                                       (VkOffset2D) { 0, 0 },
+                                       (VkExtent2D) { extent.width, extent.height });
+            } else {
+               r2d_coords_ex<CHIP>(cs, rot_origin, img_extent, (VkOffset2D) { 0, 0 },
+                                   (VkExtent2D) { extent.width, extent.height });
+            }
          } else {
             coords(ops, cmd, cs, offset, (VkOffset3D) {}, extent);
          }
@@ -3274,13 +3323,17 @@ tu_copy_image_to_buffer(struct tu_cmd_buffer *cmd,
    uint32_t pitch = dst_width * block_size;
    uint32_t layer_size = pitch * dst_height;
 
-   /* only the 2d path can rotate, reading back into the buffer needs the inverse */
    const enum a6xx_rotation copy_rot = tu_copy_transform_rotation(info->pNext);
    const VkOffset2D rot_origin = tu_rotated_region_origin(copy_rot, offset, extent);
    VkExtent2D img_extent = { extent.width, extent.height };
    if (copy_rot != ROTATE_0) {
-      blit_param = tu_rotation_inverse(copy_rot);
-      ops = &r2d_ops<CHIP>;
+      const enum a6xx_rotation inv_rot = tu_rotation_inverse(copy_rot);
+      if (CHIP == A5XX) {
+         blit_param = R3D_COPY | (tu_rotation_transposes(inv_rot) ? R3D_SWAP_COORDS : 0);
+      } else {
+         blit_param = inv_rot;
+         ops = &r2d_ops<CHIP>;
+      }
       if (tu_rotation_transposes(copy_rot))
          img_extent = (VkExtent2D) { extent.height, extent.width };
    }
@@ -3331,8 +3384,16 @@ tu_copy_image_to_buffer(struct tu_cmd_buffer *cmd,
       } else {
          ops->dst_buffer(cs, dst_format, dst_va, pitch, src_format);
          if (copy_rot != ROTATE_0) {
-            r2d_coords_ex<CHIP>(cs, (VkOffset2D) { 0, 0 }, (VkExtent2D) { extent.width, extent.height }, rot_origin,
-                                img_extent);
+            if (ops == &r3d_ops<CHIP>) {
+               r3d_coords_rotated_rect(cmd, cs, tu_rotation_inverse(copy_rot),
+                                       (VkOffset2D) { 0, 0 },
+                                       (VkExtent2D) { extent.width, extent.height },
+                                       rot_origin, img_extent);
+            } else {
+               r2d_coords_ex<CHIP>(cs, (VkOffset2D) { 0, 0 },
+                                   (VkExtent2D) { extent.width, extent.height },
+                                   rot_origin, img_extent);
+            }
          } else {
             coords(ops, cmd, cs, (VkOffset3D) { 0, 0 }, offset, extent);
          }
