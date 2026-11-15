@@ -64,6 +64,7 @@ struct tu_const_state
 #define TU5_MAX_UBO_BINDINGS   32
 #define TU5_MAX_SSBO_BINDINGS  32
 #define TU5_MAX_IMAGE_BINDINGS 32
+#define TU5_VS_UAV_BASE        16
 
 struct tu5_binding_ref {
    uint8_t set;
@@ -84,6 +85,7 @@ struct tu5_shader_bindings {
    uint8_t num_ubo;
    uint8_t num_ssbo;
    uint8_t num_image;
+   uint8_t uav_base;
    struct tu5_binding_ref tex[TU5_MAX_TEX_BINDINGS];
    struct tu5_binding_ref samp[TU5_MAX_SAMP_BINDINGS];
    struct tu5_immutable_samp_desc imm_samp[TU5_MAX_SAMP_BINDINGS];

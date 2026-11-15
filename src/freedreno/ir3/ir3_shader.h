@@ -439,6 +439,11 @@ struct ir3_shader_key {
           * SYSTEM_VALUE_VIEW_INDEX sysval.
           */
          unsigned sw_multiview : 1;
+
+         /* Base slot offset applied to bindful IBO (SSBO/image) UAV indices,
+          * used on A5xx so VS and FS share SB4_SSBO without colliding.
+          */
+         unsigned uav_base : 5;
       };
       uint32_t global;
    };

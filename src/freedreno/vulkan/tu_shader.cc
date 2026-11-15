@@ -4039,6 +4039,7 @@ tu_shader_create(struct tu_device *dev,
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
+   struct ir3_shader_key stage_ir3_key = *ir3_key;
    if (dev->physical_device->info->chip == 5 && shader->tu5_bindings) {
       nir->info.num_ubos = shader->tu5_bindings->num_ubo;
       nir->info.num_ssbos = shader->tu5_bindings->num_ssbo;
@@ -4050,6 +4051,11 @@ tu_shader_create(struct tu_device *dev,
       BITSET_ZERO(nir->info.samplers_used);
       if (shader->tu5_bindings->num_samp > 0)
          BITSET_SET_RANGE(nir->info.samplers_used, 0, shader->tu5_bindings->num_samp - 1);
+      if (nir->info.stage == MESA_SHADER_VERTEX &&
+          shader->tu5_bindings->num_ssbo + shader->tu5_bindings->num_image > 0) {
+         shader->tu5_bindings->uav_base = TU5_VS_UAV_BASE;
+         stage_ir3_key.uav_base = TU5_VS_UAV_BASE;
+      }
    }
 
    struct ir3_shader_nir_options nir_options;
@@ -4095,10 +4101,10 @@ tu_shader_create(struct tu_device *dev,
       ir3_shader_from_nir(dev->compiler, nir, &options);
 
    shader->variant =
-      ir3_shader_create_variant(ir3_shader, ir3_key, executable_info);
+      ir3_shader_create_variant(ir3_shader, &stage_ir3_key, executable_info);
 
    if (ir3_exceeds_safe_constlen(shader->variant)) {
-      struct ir3_shader_key safe_constlen_key = *ir3_key;
+      struct ir3_shader_key safe_constlen_key = stage_ir3_key;
       safe_constlen_key.safe_constlen = true;
       shader->safe_const_variant =
          ir3_shader_create_variant(ir3_shader, &safe_constlen_key,

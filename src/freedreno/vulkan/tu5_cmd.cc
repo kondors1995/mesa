@@ -535,7 +535,7 @@ tu5_emit_uavs(const struct tu_cmd_buffer *cmd,
       return;
 
    tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3 + 2 * total);
-   tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(0) |
+   tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(b->uav_base) |
                   CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
                   CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
                   CP_LOAD_STATE4_0_NUM_UNIT(total));
@@ -559,7 +559,7 @@ tu5_emit_uavs(const struct tu_cmd_buffer *cmd,
    }
 
    tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3 + 2 * total);
-   tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(0) |
+   tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(b->uav_base) |
                   CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
                   CP_LOAD_STATE4_0_STATE_BLOCK(sb) |
                   CP_LOAD_STATE4_0_NUM_UNIT(total));
@@ -682,24 +682,19 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
    tu_cs_emit(cs, tu5_tex_count_val(fs));
    tu_cs_emit(cs, 0);
 
-   const struct tu_shader *uav_shader =
-      (fs && fs->tu5_bindings &&
-       (fs->tu5_bindings->num_ssbo + fs->tu5_bindings->num_image > 0))
-         ? fs
-         : vs;
-   tu5_emit_uavs(cmd, cs, uav_shader, SB4_SSBO, false, descriptors_state);
+   tu5_emit_uavs(cmd, cs, vs, SB4_SSBO, false, descriptors_state);
+   tu5_emit_uavs(cmd, cs, fs, SB4_SSBO, false, descriptors_state);
 
    if (tu_dbg_log_enabled()) {
       const struct tu5_shader_bindings *vb = vs ? vs->tu5_bindings : NULL;
       const struct tu5_shader_bindings *fb = fs ? fs->tu5_bindings : NULL;
-      tu_dbg_log("A5_DESC cmd=%p vs=%p(tex=%u,samp=%u,ubo=%u,ssbo=%u,img=%u,hss=%d) fs=%p(tex=%u,samp=%u,img=%u,ubo=%u,ssbo=%u,hss=%d) uav=%p",
+      tu_dbg_log("A5_DESC cmd=%p vs=%p(tex=%u,samp=%u,ubo=%u,ssbo=%u,img=%u,uav=%u,hss=%d) fs=%p(tex=%u,samp=%u,img=%u,ubo=%u,ssbo=%u,uav=%u,hss=%d)",
                  cmd, vs, vb ? vb->num_tex : 0, vb ? vb->num_samp : 0, vb ? vb->num_ubo : 0,
-                 vb ? vb->num_ssbo : 0, vb ? vb->num_image : 0,
+                 vb ? vb->num_ssbo : 0, vb ? vb->num_image : 0, vb ? vb->uav_base : 0,
                  (vs && vs->variant) ? vs->variant->has_ssbo : -1,
                  fs, fb ? fb->num_tex : 0, fb ? fb->num_samp : 0, fb ? fb->num_image : 0,
-                 fb ? fb->num_ubo : 0, fb ? fb->num_ssbo : 0,
-                 (fs && fs->variant) ? fs->variant->has_ssbo : -1,
-                 uav_shader);
+                 fb ? fb->num_ubo : 0, fb ? fb->num_ssbo : 0, fb ? fb->uav_base : 0,
+                 (fs && fs->variant) ? fs->variant->has_ssbo : -1);
       if (vb && vb->num_ssbo > 0) {
          for (uint32_t i = 0; i < vb->num_ssbo; i++) {
             VkDescriptorType dt = VK_DESCRIPTOR_TYPE_MAX_ENUM;

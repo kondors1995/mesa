@@ -23,9 +23,20 @@ ir3_ibo_mapping_init(struct ir3_ibo_mapping *mapping, unsigned num_textures)
 struct ir3_instruction *
 ir3_ssbo_to_ibo(struct ir3_context *ctx, nir_src src)
 {
-   if (ir3_bindless_resource(src))
+   if (ir3_bindless_resource(src)) {
       ctx->so->bindless_ibo = true;
-   return ir3_get_src(ctx, &src)[0];
+      return ir3_get_src(ctx, &src)[0];
+   }
+
+   unsigned base = ctx->so->key.uav_base;
+   if (!base)
+      return ir3_get_src(ctx, &src)[0];
+
+   if (nir_src_is_const(src))
+      return create_immed(&ctx->build, base + nir_src_as_uint(src));
+
+   return ir3_ADD_U(&ctx->build, ir3_get_src(ctx, &src)[0], 0,
+                    create_immed(&ctx->build, base), 0);
 }
 
 unsigned
@@ -47,14 +58,15 @@ ir3_image_to_ibo(struct ir3_context *ctx, nir_src src)
       return ir3_get_src(ctx, &src)[0];
    }
 
+   unsigned base = ctx->s->info.num_ssbos + ctx->so->key.uav_base;
    if (nir_src_is_const(src)) {
       int image_idx = nir_src_as_uint(src);
-      return create_immed(&ctx->build, ctx->s->info.num_ssbos + image_idx);
+      return create_immed(&ctx->build, base + image_idx);
    } else {
       struct ir3_instruction *image_idx = ir3_get_src(ctx, &src)[0];
-      if (ctx->s->info.num_ssbos) {
+      if (base) {
          return ir3_ADD_U(&ctx->build, image_idx, 0,
-                          create_immed(&ctx->build, ctx->s->info.num_ssbos), 0);
+                          create_immed(&ctx->build, base), 0);
       } else {
          return image_idx;
       }
