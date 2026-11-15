@@ -9223,7 +9223,8 @@ tu_draw_initiator(struct tu_cmd_buffer *cmd, enum pc_di_src_sel src_sel)
          cmd->device->physical_device->info->chip == 5 ? IGNORE_VISIBILITY
                                                        : USE_VISIBILITY);
 
-   if (cmd->state.shaders[MESA_SHADER_GEOMETRY]->variant)
+   if (cmd->device->physical_device->info->chip >= 6 &&
+       cmd->state.shaders[MESA_SHADER_GEOMETRY]->variant)
       initiator |= CP_DRAW_INDX_OFFSET_0_GS_ENABLE;
 
    const struct tu_shader *tes = cmd->state.shaders[MESA_SHADER_TESS_EVAL];

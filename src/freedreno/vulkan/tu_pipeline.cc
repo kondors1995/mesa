@@ -1790,6 +1790,7 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
    const VkPipelineCreationFeedbackCreateInfo *creation_feedback =
       vk_find_struct_const(builder->create_info->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
 
+   const bool is_a5xx = builder->device->physical_device->info->chip == 5;
    bool must_compile = false;
    for (uint32_t i = 0; i < builder->create_info->stageCount; i++) {
       if (!(builder->active_stages & builder->create_info->pStages[i].stage))
@@ -1797,6 +1798,15 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
 
       mesa_shader_stage stage =
          vk_to_mesa_shader_stage(builder->create_info->pStages[i].stage);
+      if (is_a5xx && stage == MESA_SHADER_GEOMETRY) {
+         static bool warned_gs = false;
+         if (!warned_gs) {
+            warned_gs = true;
+            mesa_logw("tu5: Geometry Shader stage is unsupported on Adreno A5xx; skipping GS stage to avoid GPU hang");
+         }
+         stage_feedbacks[stage].flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
+         continue;
+      }
       stage_infos[stage] = &builder->create_info->pStages[i];
       must_compile = true;
    }
@@ -1905,6 +1915,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
          struct tu_graphics_lib_pipeline *library = builder->libraries[i];
 
          for (unsigned j = 0; j < ARRAY_SIZE(library->shaders); j++) {
+            if (is_a5xx && j == MESA_SHADER_GEOMETRY)
+               continue;
             if (library->shaders[j].nir) {
                assert(!nir[j]);
                nir[j] = nir_shader_clone(builder->mem_ctx,

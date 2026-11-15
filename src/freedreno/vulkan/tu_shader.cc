@@ -4259,11 +4259,17 @@ tu_compile_shaders(struct tu_device *device,
    VkResult result = VK_SUCCESS;
    void *mem_ctx = ralloc_context(NULL);
 
+   const bool is_a5xx = device->physical_device->info->chip == 5;
+
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
         stage = static_cast<mesa_shader_stage>(stage + 1)) {
       const VkPipelineShaderStageCreateInfo *stage_info = stage_infos[stage];
       if (!stage_info)
          continue;
+      if (is_a5xx && stage == MESA_SHADER_GEOMETRY) {
+         stage_feedbacks[stage].flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
+         continue;
+      }
 
       int64_t stage_start = os_time_get_nano();
 
@@ -4276,6 +4282,10 @@ tu_compile_shaders(struct tu_device *device,
 
       stage_feedbacks[stage].flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
       stage_feedbacks[stage].duration += os_time_get_nano() - stage_start;
+   }
+
+   if (is_a5xx && nir[MESA_SHADER_GEOMETRY]) {
+      nir[MESA_SHADER_GEOMETRY] = NULL;
    }
 
    if (nir[MESA_SHADER_GEOMETRY])

@@ -464,7 +464,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->imageCubeArray = true;
    features->independentBlend = true;
    /* Expose geometryShader on A5xx so DXVK/Proton (D3D9/D3D11) can pass
-    * vkCreateDevice; note tu5_shader.cc does not emit GS state yet. */
+    * vkCreateDevice; A5xx HW lacks stlw/ldlw GS linkage so any GS stage is
+    * safely dropped to VS->FS passthrough in tu_pipeline/tu_shader. */
    features->geometryShader = !pdevice->info->props.is_a702;
    features->tessellationShader = !is_a5xx && !pdevice->info->props.is_a702;
    features->sampleRateShading = true;
@@ -1277,6 +1278,8 @@ tu_get_properties(struct tu_physical_device *pdevice,
       props->maxTessellationControlTotalOutputComponents = 4096;
       props->maxTessellationEvaluationInputComponents = 128;
       props->maxTessellationEvaluationOutputComponents = 128;
+   }
+   if (pdevice->info->chip >= 5 && !pdevice->info->props.is_a702) {
       props->maxGeometryShaderInvocations = 32;
       props->maxGeometryInputComponents = 64;
       props->maxGeometryOutputComponents = 128;
