@@ -45,7 +45,7 @@ tu5_blend_state_is_dual_src(const struct vk_color_blend_state *cb)
 unsigned
 tu5_viewport_size(const struct vk_viewport_state *vp)
 {
-   return vp->viewport_count ? 15 : 0;
+   return vp->viewport_count ? 18 : 0;
 }
 
 void
@@ -122,6 +122,10 @@ tu5_emit_viewport(struct tu_cs *cs,
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_CL_VIEWPORT_ZCLAMP_NEAR_0, 2);
    tu_cs_emit(cs, A5XX_GRAS_CL_VIEWPORT_ZCLAMP_NEAR_0(zmin));
    tu_cs_emit(cs, A5XX_GRAS_CL_VIEWPORT_ZCLAMP_FAR_0(zmax));
+
+   tu_cs_emit_pkt4(cs, REG_A5XX_RB_VIEWPORT_ZCLAMP_NEAR, 2);
+   tu_cs_emit(cs, A5XX_RB_VIEWPORT_ZCLAMP_NEAR(zmin));
+   tu_cs_emit(cs, A5XX_RB_VIEWPORT_ZCLAMP_FAR(zmax));
 
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_CL_GUARDBAND_CLIP_ADJ, 1);
    tu_cs_emit(cs, A5XX_GRAS_CL_GUARDBAND_CLIP_ADJ_HORZ(gb_w) |
@@ -447,18 +451,17 @@ tu5_emit_rb_depth_cntl(struct tu_cs *cs,
                        const struct vk_rasterization_state *rs)
 {
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_CNTL, 1);
+   uint32_t val = 0;
    if (rp->attachments & MESA_VK_RP_ATTACHMENT_DEPTH_BIT) {
       enum adreno_compare_func zfunc = tu6_compare_func(ds->depth.compare_op);
-      tu_cs_emit(cs,
-                 COND(ds->depth.test_enable, A5XX_RB_DEPTH_CNTL_Z_TEST_ENABLE) |
-                 COND(ds->depth.test_enable && ds->depth.write_enable,
-                      A5XX_RB_DEPTH_CNTL_Z_WRITE_ENABLE) |
-                 A5XX_RB_DEPTH_CNTL_ZFUNC(zfunc) |
-                 COND(rs->depth_clamp_enable, A5XX_RB_DEPTH_CNTL_Z_CLAMP_ENABLE) |
-                 COND(ds->depth.test_enable &&
-                      zfunc != FUNC_NEVER && zfunc != FUNC_ALWAYS,
-                      A5XX_RB_DEPTH_CNTL_Z_READ_ENABLE));
-   } else {
-      tu_cs_emit(cs, 0);
+      val = COND(ds->depth.test_enable, A5XX_RB_DEPTH_CNTL_Z_TEST_ENABLE) |
+            COND(ds->depth.test_enable && ds->depth.write_enable,
+                 A5XX_RB_DEPTH_CNTL_Z_WRITE_ENABLE) |
+            A5XX_RB_DEPTH_CNTL_ZFUNC(zfunc) |
+            COND(rs->depth_clamp_enable, A5XX_RB_DEPTH_CNTL_Z_CLAMP_ENABLE) |
+            COND(ds->depth.test_enable &&
+                 zfunc != FUNC_NEVER && zfunc != FUNC_ALWAYS,
+                 A5XX_RB_DEPTH_CNTL_Z_READ_ENABLE);
    }
+   tu_cs_emit(cs, val);
 }

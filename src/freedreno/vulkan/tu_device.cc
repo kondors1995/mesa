@@ -3347,6 +3347,29 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
 
    device->vis_stream_count = 0;
 
+   if (tu_dbg_log_enabled()) {
+      struct vk_app_info *app_info = &device->instance->vk.app_info;
+      tu_dbg_log("DEVICE_CREATE dev=%p app=%s engine=%s api=0x%x chip_id=0x%" PRIx64 " tu_debug=0x%" PRIx64 " rd=%u ext_cnt=%u",
+                 device,
+                 app_info->app_name ? app_info->app_name : "(null)",
+                 app_info->engine_name ? app_info->engine_name : "(null)",
+                 app_info->api_version,
+                 device->physical_device->dev_id.chip_id,
+                 tu_env.debug.load(std::memory_order_relaxed),
+                 fd_rd_dump_env.flags,
+                 pCreateInfo->enabledExtensionCount);
+      for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
+         tu_dbg_log("  DEV_EXT[%u]=%s", i, pCreateInfo->ppEnabledExtensionNames[i]);
+      }
+      tu_dbg_log("  DEV_FEAT depthClamp=%u depthClipEnable=%u depthClipControl=%u depthClampZeroOne=%u depthBounds=%u logicOp=%u",
+                 device->vk.enabled_features.depthClamp,
+                 device->vk.enabled_features.depthClipEnable,
+                 device->vk.enabled_features.depthClipControl,
+                 device->vk.enabled_features.depthClampZeroOne,
+                 device->vk.enabled_features.depthBounds,
+                 device->vk.enabled_features.logicOp);
+   }
+
    *pDevice = tu_device_to_handle(device);
    return VK_SUCCESS;
 

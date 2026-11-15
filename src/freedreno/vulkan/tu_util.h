@@ -473,6 +473,15 @@ tu6_pack_border_color(struct bcolor_entry *bcolor, const VkClearColorValue *val,
 void
 tu_dbg_log_gmem_load_store_skips(struct tu_device *device);
 
+bool
+tu_dbg_log_enabled(void);
+
+const char *
+tu_dbg_fmt_str(VkFormat fmt);
+
+void PRINTFLIKE(1, 2)
+tu_dbg_log(const char *fmt, ...);
+
 #define perf_debug(device, fmt, ...) do {                               \
    if (TU_DEBUG(PERF))                                                  \
       mesa_log(MESA_LOG_WARN, (MESA_LOG_TAG), (fmt), ##__VA_ARGS__);    \

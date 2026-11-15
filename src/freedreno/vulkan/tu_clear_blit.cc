@@ -2916,6 +2916,18 @@ tu_CmdBlitImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(tu_image, dst_image, pBlitImageInfo->dstImage);
 
    for (uint32_t i = 0; i < pBlitImageInfo->regionCount; ++i) {
+      if (tu_dbg_log_enabled()) {
+         const VkImageBlit2 *r = &pBlitImageInfo->pRegions[i];
+         tu_dbg_log("BLIT_I2I cmd=%p src=%p(%s,t=%d,iova=0x%" PRIx64 ") dst=%p(%s,t=%d,iova=0x%" PRIx64 ") flt=%d srcMip=%u L=%u (%d,%d)->(%d,%d) dstMip=%u L=%u (%d,%d)->(%d,%d)",
+                    cmd,
+                    src_image, tu_dbg_fmt_str(src_image->vk.format), src_image->layout[0].tile_mode, src_image->iova,
+                    dst_image, tu_dbg_fmt_str(dst_image->vk.format), dst_image->layout[0].tile_mode, dst_image->iova,
+                    pBlitImageInfo->filter,
+                    r->srcSubresource.mipLevel, r->srcSubresource.baseArrayLayer,
+                    r->srcOffsets[0].x, r->srcOffsets[0].y, r->srcOffsets[1].x, r->srcOffsets[1].y,
+                    r->dstSubresource.mipLevel, r->dstSubresource.baseArrayLayer,
+                    r->dstOffsets[0].x, r->dstOffsets[0].y, r->dstOffsets[1].x, r->dstOffsets[1].y);
+      }
       /* can't blit both depth and stencil at once with D32_S8
        * TODO: more advanced 3D blit path to support it instead?
        */
@@ -3102,9 +3114,20 @@ tu_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
 
    trace_start_copy_buffer_to_image(&cmd->trace, &cmd->cs, cmd, dst_image->vk.format);
 
-   for (unsigned i = 0; i < pCopyBufferToImageInfo->regionCount; ++i)
+   for (unsigned i = 0; i < pCopyBufferToImageInfo->regionCount; ++i) {
+      if (tu_dbg_log_enabled()) {
+         const VkBufferImageCopy2 *r = pCopyBufferToImageInfo->pRegions + i;
+         tu_dbg_log("COPY_B2I cmd=%p buf=%p(iova=0x%" PRIx64 ") dst=%p(%s,t=%d,iova=0x%" PRIx64 ") boff=%" PRIu64 " rowLen=%u imgH=%u mip=%u L=%u off=(%d,%d,%d) ext=(%ux%ux%u)",
+                    cmd, src_buffer, (uint64_t)(src_buffer->bo ? src_buffer->bo->iova : 0),
+                    dst_image, tu_dbg_fmt_str(dst_image->vk.format), dst_image->layout[0].tile_mode, dst_image->iova,
+                    r->bufferOffset, r->bufferRowLength, r->bufferImageHeight,
+                    r->imageSubresource.mipLevel, r->imageSubresource.baseArrayLayer,
+                    r->imageOffset.x, r->imageOffset.y, r->imageOffset.z,
+                    r->imageExtent.width, r->imageExtent.height, r->imageExtent.depth);
+      }
       tu_copy_buffer_to_image<CHIP>(cmd, src_buffer, dst_image,
                               pCopyBufferToImageInfo->pRegions + i);
+   }
 
    if (dst_image->lrz_layout.lrz_total_size) {
       tu_disable_lrz<CHIP>(cmd, &cmd->cs, dst_image);
@@ -3580,8 +3603,12 @@ tu_copy_image_to_image(struct tu_cmd_buffer *cmd,
                                   info->srcSubresource.aspectMask),
       };
 
-      fdl6_layout_image(&staging_layout, &cmd->device->physical_device->dev_info,
-                        &params, NULL);
+      if constexpr (CHIP == A5XX) {
+         fdl5_layout_image(&staging_layout, &params);
+      } else {
+         fdl6_layout_image(&staging_layout, &cmd->device->physical_device->dev_info,
+                           &params, NULL);
+      }
 
       struct tu_bo *staging_bo;
       VkResult result = tu_get_scratch_bo(cmd->device,
@@ -3696,6 +3723,18 @@ tu_CmdCopyImage2(VkCommandBuffer commandBuffer,
                           dst_image->vk.format);
 
    for (uint32_t i = 0; i < pCopyImageInfo->regionCount; ++i) {
+      if (tu_dbg_log_enabled()) {
+         const VkImageCopy2 *r = &pCopyImageInfo->pRegions[i];
+         tu_dbg_log("COPY_I2I cmd=%p src=%p(%s,t=%d,iova=0x%" PRIx64 ") dst=%p(%s,t=%d,iova=0x%" PRIx64 ") smip=%u L=%u (%d,%d) dmip=%u L=%u (%d,%d) ext=%ux%ux%u",
+                    cmd,
+                    src_image, tu_dbg_fmt_str(src_image->vk.format), src_image->layout[0].tile_mode, src_image->iova,
+                    dst_image, tu_dbg_fmt_str(dst_image->vk.format), dst_image->layout[0].tile_mode, dst_image->iova,
+                    r->srcSubresource.mipLevel, r->srcSubresource.baseArrayLayer,
+                    r->srcOffset.x, r->srcOffset.y,
+                    r->dstSubresource.mipLevel, r->dstSubresource.baseArrayLayer,
+                    r->dstOffset.x, r->dstOffset.y,
+                    r->extent.width, r->extent.height, r->extent.depth);
+      }
       if (src_image->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT &&
           dst_image->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
          VkImageCopy2 info = pCopyImageInfo->pRegions[i];

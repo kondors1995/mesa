@@ -190,6 +190,17 @@ tu_CreateSampler(VkDevice _device,
 
    *pSampler = tu_sampler_to_handle(sampler);
 
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("CREATE_SAMP samp=%p mag=%d min=%d mip=%d addr=(%d,%d,%d) lod=(%.2f,%.2f,%.2f) bc=%d desc=[%08x %08x %08x %08x]",
+                 sampler, pCreateInfo->magFilter, pCreateInfo->minFilter,
+                 pCreateInfo->mipmapMode, pCreateInfo->addressModeU,
+                 pCreateInfo->addressModeV, pCreateInfo->addressModeW,
+                 pCreateInfo->minLod, pCreateInfo->maxLod, pCreateInfo->mipLodBias,
+                 pCreateInfo->borderColor,
+                 sampler->descriptor[0], sampler->descriptor[1],
+                 sampler->descriptor[2], sampler->descriptor[3]);
+   }
+
    return VK_SUCCESS;
 }
 TU_GENX(tu_CreateSampler);

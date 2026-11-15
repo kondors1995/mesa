@@ -68,10 +68,15 @@ static const struct tu5_format formats[PIPE_FORMAT_COUNT] = {
    V_(R8G8_USCALED, 8_8_UINT,  NONE,       WZYX),
    V_(R8G8_SSCALED, 8_8_SINT,  NONE,       WZYX),
 
+   _T(R5G6B5_UNORM,   5_6_5_UNORM,   R5G6B5_UNORM,   WZYX),
    _T(B5G6R5_UNORM,   5_6_5_UNORM,   R5G6B5_UNORM,   WXYZ),
+   _T(R5G5B5A1_UNORM, 5_5_5_1_UNORM, R5G5B5A1_UNORM, WZYX),
    _T(B5G5R5A1_UNORM, 5_5_5_1_UNORM, R5G5B5A1_UNORM, WXYZ),
    _T(B5G5R5X1_UNORM, 5_5_5_1_UNORM, R5G5B5A1_UNORM, WXYZ),
+   _T(R4G4B4A4_UNORM, 4_4_4_4_UNORM, R4G4B4A4_UNORM, WZYX),
    _T(B4G4R4A4_UNORM, 4_4_4_4_UNORM, R4G4B4A4_UNORM, WXYZ),
+   _T(A4R4G4B4_UNORM, 4_4_4_4_UNORM, R4G4B4A4_UNORM, ZYXW),
+   _T(A4B4G4R4_UNORM, 4_4_4_4_UNORM, R4G4B4A4_UNORM, XYZW),
 
    /* 24-bit */
    V_(R8G8B8_UNORM,   8_8_8_UNORM, NONE, WZYX),
@@ -291,19 +296,27 @@ tu5_format_color(enum pipe_format format, bool linear)
 {
    if (!tu5_format_color_supported(format))
       return { RB5_NONE, WZYX, false };
+   /* RB ignores COLOR_SWAP when tiled and always stores WZYX; match it. */
    return {
       formats[format].rb,
-      formats[format].swap,
+      linear ? formats[format].swap : WZYX,
       true,
    };
 }
 
 struct tu5_native_format
-tu5_format_texture(enum pipe_format format)
+tu5_format_texture(enum pipe_format format, bool linear)
 {
    if (!tu5_format_tex_supported(format))
       return { TFMT5_NONE, WZYX, false };
-   return { formats[format].tex, formats[format].swap, true };
+   /* TPL1 respects SWAP even when tiled, whereas RB writes tiled images as
+    * WZYX; force WZYX for tiled views so TPL1 and RB agree.
+    */
+   return {
+      formats[format].tex,
+      linear ? formats[format].swap : WZYX,
+      true,
+   };
 }
 
 uint32_t

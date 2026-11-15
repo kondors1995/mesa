@@ -475,6 +475,7 @@ format_list_reinterprets_r8g8_r16(enum pipe_format format, const VkImageFormatLi
    return has_r8g8 && has_non_r8g8;
 }
 
+template <chip CHIP>
 static bool
 format_list_has_swaps(const VkImageFormatListCreateInfo *fmt_list)
 {
@@ -488,7 +489,9 @@ format_list_has_swaps(const VkImageFormatListCreateInfo *fmt_list)
       enum pipe_format format =
          vk_format_to_pipe_format(fmt_list->pViewFormats[i]);
 
-      if (tu6_format_texture(format, TILE6_LINEAR, false).swap)
+      uint8_t swap = (CHIP == A5XX) ? tu5_format_texture(format, true).swap
+                                    : tu6_format_texture(format, TILE6_LINEAR, false).swap;
+      if (swap)
          return true;
    }
    return false;
@@ -664,7 +667,7 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
             }
 
             bool r8g8_r16 = format_list_reinterprets_r8g8_r16(vk_format_to_pipe_format(image->vk.format), fmt_list);
-            bool fmt_list_has_swaps = format_list_has_swaps(fmt_list);
+            bool fmt_list_has_swaps = format_list_has_swaps<CHIP>(fmt_list);
 
             if (r8g8_r16 || fmt_list_has_swaps) {
                ubwc_enabled = false;
@@ -1111,6 +1114,17 @@ tu_CreateImage(VkDevice _device,
 
    *pImage = tu_image_to_handle(image);
 
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("CREATE_IMG img=%p fmt=%s(%d) ext=%ux%ux%u mips=%u layers=%u tiling=%d usage=0x%" PRIx64 " tile_mode=%d cpp=%u pitch0=%u size=%" PRIu64 " total=%" PRIu64,
+                 image, tu_dbg_fmt_str(image->vk.format), image->vk.format,
+                 image->vk.extent.width, image->vk.extent.height, image->vk.extent.depth,
+                 image->vk.mip_levels, image->vk.array_layers,
+                 image->vk.tiling, (uint64_t)image->vk.usage,
+                 image->layout[0].tile_mode, image->layout[0].cpp,
+                 image->layout[0].slices[0].size0,
+                 image->layout[0].size, image->total_size);
+   }
+
    return VK_SUCCESS;
 fail:
    vk_image_destroy(&device->vk, alloc, &image->vk);
@@ -1182,6 +1196,12 @@ tu_image_bind(struct tu_device *device,
    image->mem = mem;
    image->mem_offset = offset;
    image->iova = mem->iova + offset;
+
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("BIND_IMG img=%p fmt=%s iova=0x%" PRIx64 " off=%" PRIu64 " total=%" PRIu64 " tile=%d",
+                 image, tu_dbg_fmt_str(image->vk.format), image->iova, offset,
+                 image->total_size, image->layout[0].tile_mode);
+   }
 
    if (image->vk.usage & (VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT |
                           VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT)) {
@@ -1590,6 +1610,22 @@ tu_CreateImageView(VkDevice _device,
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    tu_image_view_init(device, view, pCreateInfo);
+
+   if (tu_dbg_log_enabled()) {
+      const struct fdl6_view *fv = &view->view;
+      tu_dbg_log("CREATE_VIEW view=%p img=%p fmt=%s(img=%s) type=%d mip=%u/%u layer=%u/%u tile=%d base=0x%" PRIx64 " wh=%ux%u pitch=%u rb_mrt=0x%08x tex0..5=[%08x %08x %08x %08x %08x %08x]",
+                 view, view->image,
+                 tu_dbg_fmt_str(view->vk.format),
+                 tu_dbg_fmt_str(view->image->vk.format),
+                 view->vk.view_type,
+                 view->vk.base_mip_level, view->vk.level_count,
+                 view->vk.base_array_layer, view->vk.layer_count,
+                 view->image->layout[0].tile_mode,
+                 fv->base_addr, fv->width, fv->height, fv->pitch,
+                 fv->RB_MRT_BUF_INFO,
+                 fv->descriptor[0], fv->descriptor[1], fv->descriptor[2],
+                 fv->descriptor[3], fv->descriptor[4], fv->descriptor[5]);
+   }
 
    *pView = tu_image_view_to_handle(view);
 

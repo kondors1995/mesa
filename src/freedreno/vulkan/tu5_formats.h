@@ -33,7 +33,8 @@ bool tu5_format_color_supported(enum pipe_format format);
 struct tu5_native_format tu5_format_vtx(enum pipe_format format);
 struct tu5_native_format tu5_format_color(enum pipe_format format,
                                           bool linear);
-struct tu5_native_format tu5_format_texture(enum pipe_format format);
+struct tu5_native_format tu5_format_texture(enum pipe_format format,
+                                             bool linear);
 uint32_t tu5_pipe2depth(enum pipe_format format);
 uint32_t tu5_ssbo_tex_fmt(enum pipe_format format);
 

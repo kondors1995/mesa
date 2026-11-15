@@ -441,6 +441,11 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
       reinterpret_cast<struct tu_cmd_buffer **>(vk_submit->command_buffers);
    uint32_t cmdbuf_count = vk_submit->command_buffer_count;
 
+   if (tu_dbg_log_enabled()) {
+      tu_dbg_log("QUEUE_SUBMIT frame=%u submit=%u cmdbufs=%u",
+                 device->vk.current_frame, device->submit_count, cmdbuf_count);
+   }
+
    VkResult result =
       tu_insert_dynamic_cmdbufs(device, &cmd_buffers, &cmdbuf_count);
    if (result != VK_SUCCESS)

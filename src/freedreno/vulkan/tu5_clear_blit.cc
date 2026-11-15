@@ -85,9 +85,9 @@ tu5_aspect_write_mask(enum pipe_format format, VkImageAspectFlags aspect_mask)
 }
 
 static struct tu5_native_format
-tu5_blit_color_format(enum pipe_format format)
+tu5_blit_color_format(enum pipe_format format, bool linear)
 {
-   struct tu5_native_format fmt = tu5_format_color(format, true);
+   struct tu5_native_format fmt = tu5_format_color(format, linear);
    if (format == PIPE_FORMAT_Z24X8_UNORM ||
        format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
       fmt.fmt = RB5_R8G8B8A8_UNORM;
@@ -96,9 +96,9 @@ tu5_blit_color_format(enum pipe_format format)
 }
 
 static struct tu5_native_format
-tu5_blit_tex_format(enum pipe_format format)
+tu5_blit_tex_format(enum pipe_format format, bool linear)
 {
-   struct tu5_native_format fmt = tu5_format_texture(format);
+   struct tu5_native_format fmt = tu5_format_texture(format, linear);
    if (format == PIPE_FORMAT_Z24X8_UNORM ||
        format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
       fmt.fmt = TFMT5_8_8_8_8_UNORM;
@@ -382,7 +382,9 @@ tu5_r3d_src(struct tu_cmd_buffer *cmd,
    memcpy(desc, iview->descriptor, sizeof(desc));
 
    enum pipe_format src_format = iview->format;
-   struct tu5_native_format fmt = tu5_blit_tex_format(src_format);
+   bool src_linear = (desc[0] & A5XX_TEX_CONST_0_TILE_MODE__MASK) ==
+                     A5XX_TEX_CONST_0_TILE_MODE(TILE5_LINEAR);
+   struct tu5_native_format fmt = tu5_blit_tex_format(src_format, src_linear);
    bool is_s8_to_d24s8 =
       src_format == PIPE_FORMAT_S8_UINT && tu5_is_d24s8(dst_format);
    tu5_fixup_src_format(&src_format, dst_format, &fmt);
@@ -406,7 +408,7 @@ tu5_r3d_src_buffer(struct tu_cmd_buffer *cmd,
                    enum pipe_format dst_format)
 {
    uint32_t desc[12] = {};
-   struct tu5_native_format fmt = tu5_blit_tex_format(format);
+   struct tu5_native_format fmt = tu5_blit_tex_format(format, true);
    bool is_s8_to_d24s8 =
       format == PIPE_FORMAT_S8_UINT && tu5_is_d24s8(dst_format);
    tu5_fixup_src_format(&format, dst_format, &fmt);
@@ -464,21 +466,21 @@ tu5_r3d_dst(struct tu_cs *cs,
 {
    uint32_t mrt_buf_info = iview->RB_MRT_BUF_INFO;
    enum pipe_format dst_format = iview->format;
-   struct tu5_native_format fmt = tu5_blit_color_format(dst_format);
 
    if (dst_format == PIPE_FORMAT_R9G9B9E5_FLOAT &&
        src_format == PIPE_FORMAT_R32_UINT) {
-      fmt.fmt = RB5_R32_UINT;
-      fmt.swap = WZYX;
-   } else {
-      tu5_fixup_dst_format(src_format, &dst_format, &fmt);
+      mrt_buf_info &= ~(A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK |
+                        A5XX_RB_MRT_BUF_INFO_COLOR_SWAP__MASK);
+      mrt_buf_info |=
+         A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT(RB5_R32_UINT) |
+         A5XX_RB_MRT_BUF_INFO_COLOR_SWAP(WZYX);
+   } else if (dst_format == PIPE_FORMAT_S8_UINT && tu5_is_d24s8(src_format)) {
+      mrt_buf_info &= ~(A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK |
+                        A5XX_RB_MRT_BUF_INFO_COLOR_SWAP__MASK);
+      mrt_buf_info |=
+         A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT(RB5_A8_UNORM) |
+         A5XX_RB_MRT_BUF_INFO_COLOR_SWAP(WZYX);
    }
-
-   mrt_buf_info &= ~(A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK |
-                     A5XX_RB_MRT_BUF_INFO_COLOR_SWAP__MASK);
-   mrt_buf_info |=
-      A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT(static_cast<enum a5xx_color_fmt>(fmt.fmt)) |
-      A5XX_RB_MRT_BUF_INFO_COLOR_SWAP(static_cast<enum a3xx_color_swap>(fmt.swap));
 
    tu5_emit_mrt0(cs, mrt_buf_info, iview->pitch, iview->layer_size,
                  tu_layer_address(iview, layer));
@@ -491,7 +493,7 @@ tu5_r3d_dst_buffer(struct tu_cs *cs,
                    uint32_t pitch,
                    enum pipe_format src_format)
 {
-   struct tu5_native_format fmt = tu5_blit_color_format(format);
+   struct tu5_native_format fmt = tu5_blit_color_format(format, true);
    tu5_fixup_dst_format(src_format, &format, &fmt);
 
    uint32_t mrt_buf_info =
@@ -516,7 +518,7 @@ tu5_r3d_setup(struct tu_cmd_buffer *cmd,
               VkSampleCountFlagBits dst_samples,
               bool outside_pass)
 {
-   struct tu5_native_format fmt = tu5_blit_color_format(dst_format);
+   struct tu5_native_format fmt = tu5_blit_color_format(dst_format, true);
    tu5_fixup_dst_format(src_format, &dst_format, &fmt);
 
    if (!cmd->state.pass || outside_pass) {

@@ -664,6 +664,47 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
          : vs;
    tu5_emit_uavs(cmd, cs, uav_shader, SB4_SSBO, false, descriptors_state);
 
+   if (tu_dbg_log_enabled()) {
+      const struct tu5_shader_bindings *vb = vs ? vs->tu5_bindings : NULL;
+      const struct tu5_shader_bindings *fb = fs ? fs->tu5_bindings : NULL;
+      tu_dbg_log("A5_DESC cmd=%p vs=%p(tex=%u,samp=%u,ubo=%u) fs=%p(tex=%u,samp=%u,img=%u,ubo=%u,ssbo=%u)",
+                 cmd, vs, vb ? vb->num_tex : 0, vb ? vb->num_samp : 0, vb ? vb->num_ubo : 0,
+                 fs, fb ? fb->num_tex : 0, fb ? fb->num_samp : 0, fb ? fb->num_image : 0,
+                 fb ? fb->num_ubo : 0, fb ? fb->num_ssbo : 0);
+      if (fb) {
+         for (uint32_t i = 0; i < fb->num_tex; i++) {
+            const uint32_t *d = tu5_lookup_desc(cmd, fs, descriptors_state, &fb->tex[i], false, NULL);
+            if (d) {
+               uint64_t addr = ((uint64_t)(d[5] & 0x1ffff) << 32) | (d[4] & ~0x3fu);
+               uint32_t fmt = (d[0] >> 22) & 0xff;
+               uint32_t swap = (d[0] >> 20) & 0x3;
+               uint32_t tile = d[0] & 0x3;
+               tu_dbg_log("  A5_FS_TEX[%u] set=%u bind=%u ptr=%p fmt=0x%x swap=%u tile=%u addr=0x%" PRIx64 " d=[%08x %08x %08x %08x %08x %08x]",
+                          i, fb->tex[i].set, fb->tex[i].binding, d, fmt, swap, tile, addr,
+                          d[0], d[1], d[2], d[3], d[4], d[5]);
+            } else {
+               tu_dbg_log("  A5_FS_TEX[%u] set=%u bind=%u ptr=NULL",
+                          i, fb->tex[i].set, fb->tex[i].binding);
+            }
+         }
+         for (uint32_t i = 0; i < fb->num_samp; i++) {
+            if (fb->samp[i].has_immutable_sampler) {
+               const uint32_t *s = fb->imm_samp[i].dword;
+               tu_dbg_log("  A5_FS_SAMP[%u] IMM [%08x %08x %08x %08x]", i, s[0], s[1], s[2], s[3]);
+            } else {
+               VkDescriptorType dt = VK_DESCRIPTOR_TYPE_SAMPLER;
+               const uint32_t *s = tu5_lookup_desc(cmd, fs, descriptors_state, &fb->samp[i], false, &dt);
+               if (s && dt == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                  s += FDL6_TEX_CONST_DWORDS;
+               if (s)
+                  tu_dbg_log("  A5_FS_SAMP[%u] dt=%d [%08x %08x %08x %08x]", i, dt, s[0], s[1], s[2], s[3]);
+               else
+                  tu_dbg_log("  A5_FS_SAMP[%u] dt=%d NULL", i, dt);
+            }
+         }
+      }
+   }
+
    cmd->state.desc_sets = tu_cs_end_draw_state(&cmd->sub_cs, &state_cs);
    if (!(cmd->state.dirty & TU_CMD_DIRTY_DRAW_STATE)) {
       tu_cs_emit_pkt7(&cmd->draw_cs, CP_SET_DRAW_STATE, 3);

@@ -7409,6 +7409,25 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
 
    cmd->patchpoints_ctx = ralloc_context(NULL);
 
+   if (tu_dbg_log_enabled()) {
+      const VkRect2D *ra = &cmd->state.render_areas[0];
+      tu_dbg_log("BEGIN_RP cmd=%p disable_gmem=%d(%s) fb=%ux%u ra=(%d,%d %ux%u) atts=%u",
+                 cmd, cmd->state.rp.disable_gmem,
+                 cmd->state.rp.force_render_mode_reason ? cmd->state.rp.force_render_mode_reason : "",
+                 cmd->state.framebuffer->width, cmd->state.framebuffer->height,
+                 ra->offset.x, ra->offset.y, ra->extent.width, ra->extent.height,
+                 pass->attachment_count);
+      for (uint32_t a = 0; a < MIN2(pass->attachment_count, 4); a++) {
+         const struct tu_image_view *iv = cmd->state.attachments[a];
+         tu_dbg_log("  RP_ATT[%u] view=%p img=%p fmt=%s tile=%d load=%d store=%d clr=0x%x",
+                    a, iv, iv ? iv->image : NULL,
+                    tu_dbg_fmt_str(pass->attachments[a].format),
+                    iv ? iv->image->layout[0].tile_mode : -1,
+                    pass->attachments[a].load, pass->attachments[a].store,
+                    pass->attachments[a].clear_mask);
+      }
+   }
+
    tu_emit_subpass_begin<CHIP>(cmd);
 }
 TU_GENX(tu_CmdBeginRenderPass2);
@@ -7659,6 +7678,14 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
       cmd->patchpoints_ctx = ralloc_context(NULL);
 
    if (!resuming) {
+      if (tu_dbg_log_enabled()) {
+         const VkRect2D *ra = &cmd->state.render_areas[0];
+         tu_dbg_log("BEGIN_DYN_RP cmd=%p disable_gmem=%d fb=%ux%u ra=(%d,%d %ux%u) atts=%u",
+                    cmd, cmd->state.rp.disable_gmem,
+                    cmd->state.framebuffer->width, cmd->state.framebuffer->height,
+                    ra->offset.x, ra->offset.y, ra->extent.width, ra->extent.height,
+                    cmd->state.pass->attachment_count);
+      }
       tu_emit_subpass_begin<CHIP>(cmd);
    } else {
       /* Even resuming vkCmdBeginRendering resets RT and input attachment locations, so we have to re-emit them. */

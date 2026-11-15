@@ -131,7 +131,7 @@ tu5_buffer_view_init(uint32_t *dst,
 {
    memset(dst, 0, FDL6_TEX_CONST_DWORDS * sizeof(uint32_t));
 
-   struct tu5_native_format tex_fmt = tu5_format_texture(format);
+   struct tu5_native_format tex_fmt = tu5_format_texture(format, true);
    uint32_t blocksize = util_format_get_blocksize(format);
    uint32_t elements = blocksize ? MIN2(range / blocksize, (1u << 27)) : 0;
 
@@ -177,8 +177,8 @@ tu5_view_init(struct fdl6_view *iview,
    memset(iview, 0, sizeof(*iview));
 
    enum pipe_format format = args->format;
-   struct tu5_native_format tex_fmt = tu5_format_texture(format);
-   bool linear = !fdl_tile_mode(layout, args->base_miplevel);
+   bool linear = !layout->tile_mode;
+   struct tu5_native_format tex_fmt = tu5_format_texture(format, linear);
    struct tu5_native_format color_fmt = tu5_format_color(format, linear);
 
    uint32_t width = u_minify(layout->width0, args->base_miplevel);

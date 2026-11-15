@@ -6,7 +6,13 @@
 #include "tu_util.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "util/os_file.h"
 #include "util/os_file_notify.h"
@@ -639,4 +645,113 @@ tu_dbg_log_gmem_load_store_skips(struct tu_device *device)
    last_total_stores = current_total_stores;
 
    pthread_mutex_unlock(&device->submit_mutex);
+}
+
+static pthread_mutex_t tu_dbg_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int tu_dbg_log_fd = -1;
+static int tu_dbg_log_state = 0; /* 0 = unknown, 1 = on, -1 = off */
+static uint32_t tu_dbg_log_lines = 0;
+static uint32_t tu_dbg_log_max_lines = 100000;
+static uint64_t tu_dbg_log_last_check_ns = 0;
+static bool tu_dbg_log_err_reported = false;
+
+static void
+tu_dbg_log_refresh_locked(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+   if (tu_dbg_log_state != 0 && now_ns - tu_dbg_log_last_check_ns < 500000000ull)
+      return;
+   tu_dbg_log_last_check_ns = now_ns;
+
+   const char *prop = os_get_option("TU_LOG");
+   bool want = (prop && prop[0] && strcmp(prop, "0") != 0) ||
+               (access("/data/local/tmp/tu_debug.enable", F_OK) == 0);
+
+   if (want) {
+      if (tu_dbg_log_fd < 0) {
+         const char *path = os_get_option("TU_LOG_FILE");
+         if (!path || !path[0])
+            path = "/data/local/tmp/tu_debug.log";
+         tu_dbg_log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666);
+         if (tu_dbg_log_fd < 0) {
+            if (!tu_dbg_log_err_reported) {
+               tu_dbg_log_err_reported = true;
+               mesa_loge("tu_dbg_log: failed to open %s: %s", path, strerror(errno));
+            }
+            tu_dbg_log_state = -1;
+            return;
+         }
+         if (prop && atoi(prop) > 1)
+            tu_dbg_log_max_lines = (uint32_t)atoi(prop);
+      }
+      if (access("/data/local/tmp/tu_debug.reset", F_OK) == 0) {
+         unlink("/data/local/tmp/tu_debug.reset");
+         if (ftruncate(tu_dbg_log_fd, 0) == 0)
+            lseek(tu_dbg_log_fd, 0, SEEK_SET);
+         tu_dbg_log_lines = 0;
+      }
+      tu_dbg_log_state = (tu_dbg_log_lines < tu_dbg_log_max_lines) ? 1 : -1;
+   } else {
+      if (tu_dbg_log_fd >= 0) {
+         close(tu_dbg_log_fd);
+         tu_dbg_log_fd = -1;
+      }
+      tu_dbg_log_lines = 0;
+      tu_dbg_log_err_reported = false;
+      tu_dbg_log_state = -1;
+   }
+}
+
+const char *
+tu_dbg_fmt_str(VkFormat fmt)
+{
+   return vk_Format_to_str(fmt);
+}
+
+bool
+tu_dbg_log_enabled(void)
+{
+   static std::atomic<uint32_t> check_counter{0};
+   uint32_t c = check_counter.fetch_add(1, std::memory_order_relaxed);
+   if (unlikely(tu_dbg_log_state == 0 || (c & 0xff) == 0)) {
+      pthread_mutex_lock(&tu_dbg_log_mutex);
+      tu_dbg_log_refresh_locked();
+      pthread_mutex_unlock(&tu_dbg_log_mutex);
+   }
+   return tu_dbg_log_state > 0;
+}
+
+void
+tu_dbg_log(const char *fmt, ...)
+{
+   if (!tu_dbg_log_enabled())
+      return;
+
+   char buf[2048];
+   va_list ap;
+   va_start(ap, fmt);
+   int n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+   va_end(ap);
+   if (n < 0)
+      return;
+   if (n > (int)sizeof(buf) - 2)
+      n = sizeof(buf) - 2;
+   if (n == 0 || buf[n - 1] != '\n')
+      buf[n++] = '\n';
+
+   pthread_mutex_lock(&tu_dbg_log_mutex);
+   if (tu_dbg_log_fd >= 0 && tu_dbg_log_lines < tu_dbg_log_max_lines) {
+      dprintf(tu_dbg_log_fd, "[pid=%d tid=%d] ", (int)getpid(), (int)gettid());
+      ssize_t written = write(tu_dbg_log_fd, buf, (size_t)n);
+      (void)written;
+      tu_dbg_log_lines++;
+      if (tu_dbg_log_lines == tu_dbg_log_max_lines) {
+         dprintf(tu_dbg_log_fd, "[pid=%d] --- LINE LIMIT %u REACHED ---\n",
+                 (int)getpid(), tu_dbg_log_max_lines);
+         tu_dbg_log_state = -1;
+      }
+   }
+   pthread_mutex_unlock(&tu_dbg_log_mutex);
 }

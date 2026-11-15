@@ -1507,9 +1507,30 @@ tu_update_descriptor_sets(const struct tu_device *device,
          case VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM:
          case VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM:
          case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+            if (tu_dbg_log_enabled()) {
+               const VkDescriptorImageInfo *ii = writeset->pImageInfo + j;
+               VK_FROM_HANDLE(tu_image_view, iv, ii->imageView);
+               tu_dbg_log("DESC_WRITE set=%p(push=%d) bind=%u+%u type=%d view=%p(img=%p %s) layout=%d",
+                          set, !!dstSetOverride, writeset->dstBinding,
+                          writeset->dstArrayElement + j, writeset->descriptorType,
+                          iv, iv ? iv->image : NULL,
+                          iv ? tu_dbg_fmt_str(iv->vk.format) : "null",
+                          ii->imageLayout);
+            }
             write_image_descriptor(ptr, writeset->descriptorType, writeset->pImageInfo + j);
             break;
          case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+            if (tu_dbg_log_enabled()) {
+               const VkDescriptorImageInfo *ii = writeset->pImageInfo + j;
+               VK_FROM_HANDLE(tu_image_view, iv, ii->imageView);
+               VK_FROM_HANDLE(tu_sampler, smp, ii->sampler);
+               tu_dbg_log("DESC_WRITE set=%p(push=%d) bind=%u+%u COMBINED view=%p(img=%p %s) samp=%p layout=%d",
+                          set, !!dstSetOverride, writeset->dstBinding,
+                          writeset->dstArrayElement + j,
+                          iv, iv ? iv->image : NULL,
+                          iv ? tu_dbg_fmt_str(iv->vk.format) : "null",
+                          smp, ii->imageLayout);
+            }
             write_combined_image_sampler_descriptor(
                ptr, writeset->descriptorType, writeset->pImageInfo + j, !samplers,
                sampler_has_subsampled_bit(samplers, writeset->dstArrayElement + j));
