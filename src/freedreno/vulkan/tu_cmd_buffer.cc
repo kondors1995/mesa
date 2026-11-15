@@ -1593,7 +1593,8 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
    const struct tu_vsc_config *vsc = tu_vsc_config(cmd, cmd->state.tiling);
 
    /* XFB is incompatible with non-hw binning GMEM rendering, see use_hw_binning */
-   if (cmd->state.rp.xfb_used && !vsc->binning_possible) {
+   if (cmd->state.rp.xfb_used &&
+       (cmd->device->physical_device->info->chip == 5 || !vsc->binning_possible)) {
       cmd->state.rp.force_render_mode_reason =
          "XFB is incompatible with non-hw binning GMEM rendering";
       return true;
@@ -5656,6 +5657,8 @@ tu_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
    if constexpr (CHIP != A5XX) {
       tu_cond_exec_end(cs);
    }
+
+   cmd->state.rp.xfb_used = true;
 }
 TU_GENX(tu_CmdBeginTransformFeedbackEXT);
 
@@ -5695,9 +5698,9 @@ tu_CmdEndTransformFeedbackEXT(VkCommandBuffer commandBuffer,
 
       VK_FROM_HANDLE(tu_buffer, buf, pCounterBuffers[i]);
 
-      /* VPC_SO_FLUSH_BASE has dwords counter, but counter should be in bytes */
+      /* VPC_SO_FLUSH_BASE has dwords counter on A5xx/A6xx, bytes on A7xx+ */
       cs->mem_to_reg(tu_scratch_reg<CHIP>(0), global_iova_arr(cmd, flush_base, idx),
-                     { .one_reg_wr = true, .shift_by_2 = CHIP == A6XX, .wait_cache_flush = true });
+                     { .one_reg_wr = true, .shift_by_2 = CHIP <= A6XX, .wait_cache_flush = true });
 
       if (offset) {
          cs->rmw(tu_scratch_reg<CHIP>(0), {

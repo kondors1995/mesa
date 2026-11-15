@@ -562,6 +562,10 @@ tu5_build_vpc_linkage(const struct ir3_shader_variant *vs,
    ir3_link_shaders(&out->linkage, vs, fs, true);
    memcpy(out->varmask, out->linkage.varmask, sizeof(out->varmask));
 
+   /* Add streamout outputs after computing VPC_VAR_DISABLE bitmask. */
+   if (vs->stream_output.num_outputs)
+      ir3_link_stream_out(&out->linkage, vs);
+
    out->clip_mask = vs->clip_mask;
    out->cull_mask = vs->cull_mask;
    out->clip_cull_mask = out->clip_mask | out->cull_mask;
@@ -612,6 +616,85 @@ tu5_calc_stride_in_vpc(const struct ir3_shader_variant *vs,
    struct tu5_vpc_linkage l;
    tu5_build_vpc_linkage(vs, fs, &l);
    return l.linkage.max_loc;
+}
+
+static void
+tu5_emit_stream_out(struct tu_cs *cs,
+                    const struct ir3_shader_variant *vs,
+                    const struct ir3_shader_linkage *l)
+{
+   const struct ir3_stream_output_info *info = &vs->stream_output;
+
+   if (info->num_outputs == 0) {
+      tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_CNTL, 1);
+      tu_cs_emit(cs, 0);
+      tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_BUF_CNTL, 1);
+      tu_cs_emit(cs, 0);
+      return;
+   }
+
+   uint32_t written_ncomp[IR3_MAX_SO_BUFFERS] = {};
+   uint32_t prog_dwords = align(l->max_loc, 2) / 2;
+   uint32_t prog[64] = {};
+   assert(prog_dwords <= ARRAY_SIZE(prog));
+
+   for (unsigned i = 0; i < info->num_outputs; i++) {
+      const struct ir3_stream_output *out = &info->output[i];
+      gl_varying_slot slot = static_cast<gl_varying_slot>(out->location);
+      unsigned idx;
+
+      written_ncomp[out->output_buffer] += out->num_components;
+
+      for (idx = 0; idx < l->cnt; idx++)
+         if (l->var[idx].slot == slot)
+            break;
+
+      if (idx >= l->cnt)
+         continue;
+
+      for (unsigned j = 0; j < out->num_components; j++) {
+         unsigned c = j + out->start_component;
+         unsigned loc = l->var[idx].loc + c;
+         unsigned off = j + out->dst_offset;
+
+         assert(loc / 2 < prog_dwords);
+         if (loc & 1) {
+            prog[loc / 2] |= A5XX_VPC_SO_PROG_B_EN |
+                             A5XX_VPC_SO_PROG_B_BUF(out->output_buffer) |
+                             A5XX_VPC_SO_PROG_B_OFF(off * 4);
+         } else {
+            prog[loc / 2] |= A5XX_VPC_SO_PROG_A_EN |
+                             A5XX_VPC_SO_PROG_A_BUF(out->output_buffer) |
+                             A5XX_VPC_SO_PROG_A_OFF(off * 4);
+         }
+      }
+   }
+
+   uint32_t ncomp[IR3_MAX_SO_BUFFERS];
+   for (unsigned i = 0; i < IR3_MAX_SO_BUFFERS; i++)
+      ncomp[i] = info->stride[i] ? info->stride[i] : written_ncomp[i];
+
+   tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, 12 + (2 * prog_dwords));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_BUF_CNTL);
+   tu_cs_emit(cs, A5XX_VPC_SO_BUF_CNTL_ENABLE |
+                  COND(ncomp[0] > 0, A5XX_VPC_SO_BUF_CNTL_BUF0) |
+                  COND(ncomp[1] > 0, A5XX_VPC_SO_BUF_CNTL_BUF1) |
+                  COND(ncomp[2] > 0, A5XX_VPC_SO_BUF_CNTL_BUF2) |
+                  COND(ncomp[3] > 0, A5XX_VPC_SO_BUF_CNTL_BUF3));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(0));
+   tu_cs_emit(cs, ncomp[0]);
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(1));
+   tu_cs_emit(cs, ncomp[1]);
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(2));
+   tu_cs_emit(cs, ncomp[2]);
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(3));
+   tu_cs_emit(cs, ncomp[3]);
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_CNTL);
+   tu_cs_emit(cs, A5XX_VPC_SO_CNTL_ENABLE);
+   for (unsigned i = 0; i < prog_dwords; i++) {
+      tu_cs_emit(cs, REG_A5XX_VPC_SO_PROG);
+      tu_cs_emit(cs, prog[i]);
+   }
 }
 
 void
@@ -731,6 +814,8 @@ tu5_emit_vpc(struct tu_cs *cs,
 
    tu_cs_emit_pkt4(cs, REG_A5XX_PC_CLIP_CNTL, 1);
    tu_cs_emit(cs, A5XX_PC_CLIP_CNTL_CLIP_MASK(l.clip_mask));
+
+   tu5_emit_stream_out(cs, vs, &linkage);
 
    if (tu_dbg_log_enabled()) {
       tu_dbg_log("A5_VPC vs=%p(in=%u,inst=%u,c=%u,clip=0x%x,cull=0x%x,pos=0x%x) fs=%p(tin=%u,inst=%u,c=%u,kill=%u) cnt=%u max=%u posloc=%u",

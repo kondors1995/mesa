@@ -73,6 +73,7 @@ a5xx_base = GPUProps(
         instr_cache_size = 64,
         has_cp_reg_write = False,
         has_sampler_minmax = True,
+        num_xfb_streams = 1,
         vs_max_inputs_count = 32,
         max_sets = 5,
         line_width_min = 1.0,

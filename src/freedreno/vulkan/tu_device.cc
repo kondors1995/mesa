@@ -417,8 +417,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_texel_buffer_alignment = true,
       .EXT_texture_compression_astc_hdr = device->info->props.has_astc_hdr,
       .EXT_tooling_info = true,
-      /* tu5 lacks VPC_SO_* setup / A6xx VPC_SO_OVERRIDE */
-      .EXT_transform_feedback = !is_a5xx,
+      .EXT_transform_feedback = true,
       .EXT_vertex_attribute_divisor = true,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_zero_initialize_device_memory = true,
@@ -926,8 +925,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->texelBufferAlignment = true;
 
    /* VK_EXT_transform_feedback */
-   features->transformFeedback = !is_a5xx;
-   features->geometryStreams = !is_a5xx && pdevice->info->props.num_xfb_streams > 1;
+   features->transformFeedback = true;
+   features->geometryStreams = pdevice->info->props.num_xfb_streams > 1;
 
    /* VK_EXT_vertex_input_dynamic_state */
    features->vertexInputDynamicState = true;
@@ -1422,15 +1421,16 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->maxPushDescriptors = MAX_PUSH_DESCRIPTORS;
 
    /* VK_EXT_transform_feedback */
+   const bool is_a5xx = pdevice->info->chip == 5;
    props->maxTransformFeedbackStreams = pdevice->info->props.num_xfb_streams;
    props->maxTransformFeedbackBuffers = IR3_MAX_SO_BUFFERS;
    props->maxTransformFeedbackBufferSize = UINT32_MAX;
    props->maxTransformFeedbackStreamDataSize = 512;
    props->maxTransformFeedbackBufferDataSize = 512;
    props->maxTransformFeedbackBufferDataStride = 512;
-   props->transformFeedbackQueries = true;
-   props->transformFeedbackStreamsLinesTriangles = true;
-   props->transformFeedbackRasterizationStreamSelect = true;
+   props->transformFeedbackQueries = !is_a5xx;
+   props->transformFeedbackStreamsLinesTriangles = !is_a5xx;
+   props->transformFeedbackRasterizationStreamSelect = !is_a5xx;
    props->transformFeedbackDraw = true;
 
    /* VK_EXT_sample_locations */
