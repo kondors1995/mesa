@@ -220,6 +220,7 @@ TEMPLATE_C = Template(COPYRIGHT + """
 #include "vk_physical_device.h"
 #include "vk_physical_device_features.h"
 #include "vk_util.h"
+#include "util/log.h"
 
 static VkResult
 check_physical_device_features(struct vk_physical_device *physical_device,
@@ -228,9 +229,11 @@ check_physical_device_features(struct vk_physical_device *physical_device,
                                const char *struct_name)
 {
 % for flag in pdev_features:
-   if (enabled->${flag} && !supported->${flag})
+   if (enabled->${flag} && !supported->${flag}) {
+      mesa_loge("%s.%s not supported (VK_ERROR_FEATURE_NOT_PRESENT)", struct_name, "${flag}");
       return vk_errorf(physical_device, VK_ERROR_FEATURE_NOT_PRESENT,
                        "%s.%s not supported", struct_name, "${flag}");
+   }
 % endfor
 
    return VK_SUCCESS;
@@ -341,9 +344,11 @@ vk_physical_device_check_device_features(struct vk_physical_device *physical_dev
          const ${f.c_type} *a = &supported_${f.c_type};
          const ${f.c_type} *b = features;
 % for flag in f.features:
-         if (b->${flag} && !a->${flag})
+         if (b->${flag} && !a->${flag}) {
+            mesa_loge("%s.%s not supported (VK_ERROR_FEATURE_NOT_PRESENT)", "${f.c_type}", "${flag}");
             return vk_errorf(physical_device, VK_ERROR_FEATURE_NOT_PRESENT,
                              "%s.%s not supported", "${f.c_type}", "${flag}");
+         }
 % endfor
          break;
       }
