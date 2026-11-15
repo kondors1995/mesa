@@ -1112,6 +1112,14 @@ emit_begin_occlusion_query(struct tu_cmd_buffer *cmdbuf,
 
    uint64_t begin_iova = occlusion_query_iova(pool, query, begin);
 
+   if (CHIP == A5XX) {
+      tu5_emit_sample_counter_cntl(cs);
+      tu5_emit_sample_counter_addr(cs, begin_iova);
+      tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+      tu_cs_emit(cs, ZPASS_DONE);
+      return;
+   }
+
    tu_cs_emit_regs(cs,
                    A6XX_RB_SAMPLE_COUNTER_CNTL(.copy = true));
 
@@ -1164,7 +1172,8 @@ emit_begin_stat_query(struct tu_cmd_buffer *cmdbuf,
    uint64_t begin_iova = pipeline_stat_query_iova(pool, query, begin, 0);
 
    if (is_pipeline_query_with_vertex_stage(pool->vk.pipeline_statistics)) {
-      bool need_cond_exec = cmdbuf->state.pass && cmdbuf->state.prim_counters_running;
+      bool need_cond_exec = CHIP != A5XX && cmdbuf->state.pass &&
+                            cmdbuf->state.prim_counters_running;
       cmdbuf->state.prim_counters_running++;
 
       if (cmdbuf->state.pass)
@@ -1420,7 +1429,7 @@ emit_begin_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
 
    cmdbuf->state.prim_counters_running++;
 
-   if (cmdbuf->state.pass) {
+   if (CHIP != A5XX && cmdbuf->state.pass) {
       /* Primitives that passed all tests are still counted in in each
        * tile even with HW binning beforehand. Do not permit it.
        */
@@ -1438,7 +1447,7 @@ emit_begin_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
       .is_64b = true,
    });
 
-   if (cmdbuf->state.pass) {
+   if (CHIP != A5XX && cmdbuf->state.pass) {
       tu_cond_exec_end(cs);
    }
 }
@@ -1533,19 +1542,38 @@ emit_end_occlusion_query(struct tu_cmd_buffer *cmdbuf,
       tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
    }
 
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_SAMPLE_COUNTER_CNTL(.copy = true));
-
-   if (!cmdbuf->device->physical_device->info->props.has_event_write_sample_count) {
-      tu_cs_emit_regs(cs,
-                        A6XX_RB_SAMPLE_COUNTER_BASE(.qword = end_iova));
+   if (CHIP == A5XX) {
+      tu5_emit_sample_counter_cntl(cs);
+      tu5_emit_sample_counter_addr(cs, begin_iova);
       tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
       tu_cs_emit(cs, ZPASS_DONE);
-      if (CHIP == A7XX) {
-         /* Copied from blob's cmdstream, not sure why it is done. */
+      return;
+   }
+
+   if (CHIP == A5XX) {
+      tu5_emit_sample_counter_cntl(cs);
+      tu5_emit_sample_counter_addr(cs, end_iova);
+      tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+      tu_cs_emit(cs, ZPASS_DONE);
+   } else {
+      tu_cs_emit_regs(cs,
+                      A6XX_RB_SAMPLE_COUNTER_CNTL(.copy = true));
+
+      if (!cmdbuf->device->physical_device->info->props.has_event_write_sample_count) {
+         tu_cs_emit_regs(cs,
+                           A6XX_RB_SAMPLE_COUNTER_BASE(.qword = end_iova));
          tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-         tu_cs_emit(cs, CCU_CLEAN_DEPTH);
+         tu_cs_emit(cs, ZPASS_DONE);
+         if (CHIP == A7XX) {
+            /* Copied from blob's cmdstream, not sure why it is done. */
+            tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+            tu_cs_emit(cs, CCU_CLEAN_DEPTH);
+         }
       }
+   }
+
+   if (CHIP == A5XX ||
+       !cmdbuf->device->physical_device->info->props.has_event_write_sample_count) {
 
       tu_cs_emit_pkt7(cs, CP_WAIT_REG_MEM, 6);
       tu_cs_emit(cs, CP_WAIT_REG_MEM_0_FUNCTION(WRITE_NE) |
@@ -1975,7 +2003,7 @@ emit_end_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
    uint64_t result_iova = primitives_generated_query_iova(pool, query, result);
    uint64_t available_iova = query_available_iova(pool, query);
 
-   if (cmdbuf->state.pass) {
+   if (CHIP != A5XX && cmdbuf->state.pass) {
       tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
                              CP_COND_REG_EXEC_0_SYSMEM |
                              CP_COND_REG_EXEC_0_BINNING);
@@ -2003,7 +2031,7 @@ emit_end_prim_generated_query(struct tu_cmd_buffer *cmdbuf,
     */
    emit_stop_primitive_ctrs<CHIP>(cmdbuf, cs, VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT);
 
-   if (cmdbuf->state.pass) {
+   if (CHIP != A5XX && cmdbuf->state.pass) {
       tu_cond_exec_end(cs);
    }
 
@@ -2132,7 +2160,13 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
       emit_counter_barrier<CHIP>(cs);
    }
 
-   cs->reg_to_mem(query_result_iova(pool, query, uint64_t, 0), CP_ALWAYS_ON_COUNTER(CHIP));
+   if constexpr (CHIP == A5XX) {
+      cs->reg_to_mem(query_result_iova(pool, query, uint64_t, 0),
+                     { .reg = tu5_always_on_counter_reg() },
+                     { .cnt = 2, .is_64b = true });
+   } else {
+      cs->reg_to_mem(query_result_iova(pool, query, uint64_t, 0), CP_ALWAYS_ON_COUNTER(CHIP));
+   }
 
    /* Only flag availability once the entire renderpass is done, similar to
     * the begin/end path.

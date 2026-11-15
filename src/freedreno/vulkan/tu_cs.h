@@ -1089,7 +1089,10 @@ template <chip CHIP>
 static inline fd_reg_pair
 tu_scratch_reg(int idx, uint32_t val = 0)
 {
-   if (CHIP >= A8XX) {
+   if constexpr (CHIP == A5XX) {
+      /* REG_A5XX_CP_SCRATCH_REG(idx) == 0xb78 + idx */
+      return { .reg = 0x0b78u + idx, .value = val };
+   } else if (CHIP >= A8XX) {
       return CP_SCRATCH_GLOBAL_REG(CHIP, idx, val);
    } else {
       return CP_SCRATCH_REG(CHIP, idx, val);

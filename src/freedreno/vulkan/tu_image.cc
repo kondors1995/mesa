@@ -8,6 +8,7 @@
  */
 
 #include "tu_image.h"
+#include "tu5_formats.h"
 
 #include "drm-uapi/drm_fourcc.h"
 
@@ -282,7 +283,12 @@ tu_image_view_init(struct tu_device *device,
       args.filter_num_phases = sample_weights->numPhases;
    }
 
-   TU_CALLX(device, fdl6_view_init)(&iview->view, layouts, &args, device->use_z24uint_s8uint);
+   if (device->physical_device->info->chip == 5) {
+      tu5_view_init(&iview->view, layouts, &args);
+   } else {
+      FD_CALLX(device->physical_device->info, fdl6_view_init)(
+         &iview->view, layouts, &args, device->use_z24uint_s8uint);
+   }
 
    if (image->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
       VkImageAspectFlags other_aspect =
@@ -291,9 +297,13 @@ tu_image_view_init(struct tu_device *device,
       const struct fdl_layout *other_layout =
          &image->layout[tu6_plane_index(image->vk.format, other_aspect)];
       args.format = tu_aspects_to_plane(iview->vk.format, other_aspect);
-      TU_CALLX(device, fdl6_view_init)(&iview->view_ds_other_aspect,
-                                       &other_layout, &args,
-                                       device->use_z24uint_s8uint);
+      if (device->physical_device->info->chip == 5) {
+         tu5_view_init(&iview->view_ds_other_aspect, &other_layout, &args);
+      } else {
+         FD_CALLX(device->physical_device->info, fdl6_view_init)(
+            &iview->view_ds_other_aspect, &other_layout, &args,
+            device->use_z24uint_s8uint);
+      }
 
       iview->view_depth = (aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) ? &iview->view : &iview->view_ds_other_aspect;
       iview->view_stencil = (other_aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? &iview->view : &iview->view_ds_other_aspect;
@@ -333,6 +343,9 @@ ubwc_possible(struct tu_device *device,
               uint32_t mip_levels,
               bool use_z24uint_s8uint)
 {
+   if (info->chip < 6)
+      return false;
+
    /* TODO: enable for a702 */
    if (info->props.is_a702)
       return false;
@@ -779,6 +792,11 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
           */
       }
 
+      if constexpr (CHIP == A5XX) {
+         ubwc_enabled = false;
+         force_ubwc = false;
+      }
+
       layout->tile_mode = tile_mode;
       layout->ubwc = ubwc_enabled;
 
@@ -801,10 +819,31 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
          .plane = i,
       };
 
-      if (!fdl6_layout_image(layout, &device->physical_device->dev_info,
-                             &params, plane_layouts ? &plane_layout : NULL)) {
-         assert(plane_layouts); /* can only fail with explicit layout */
-         return vk_error(device, VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT);
+      if constexpr (CHIP == A5XX) {
+         params.ubwc = false;
+         params.force_ubwc = false;
+         fdl5_layout_image(layout, &params);
+         layout->mip_levels = params.mip_levels;
+         if (plane_layouts) {
+            if (!layout->tile_mode) {
+               layout->pitchalign =
+                  layout->cpp > 4 ? fdl_cpp_shift(layout) + 4 : 6;
+            }
+            if (align(plane_layout.pitch, 1 << layout->pitchalign) != plane_layout.pitch)
+               return vk_error(device, VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT);
+            layout->pitch0 = plane_layout.pitch;
+            layout->slices[0].offset = plane_layout.offset;
+            layout->slices[0].size0 =
+               util_format_get_nblocksy(layout->format, layout->height0) * plane_layout.pitch;
+            layout->layer_size = layout->slices[0].size0;
+            layout->size = plane_layout.offset + layout->layer_size * params.array_size;
+         }
+      } else {
+         if (!fdl6_layout_image(layout, &device->physical_device->dev_info,
+                                &params, plane_layouts ? &plane_layout : NULL)) {
+            assert(plane_layouts); /* can only fail with explicit layout */
+            return vk_error(device, VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT);
+         }
       }
 
       if (TU_DEBUG(LAYOUT))

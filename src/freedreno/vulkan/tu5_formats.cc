@@ -1,0 +1,334 @@
+/*
+ * Copyright © 2016 Rob Clark <robclark@freedesktop.org>
+ * Copyright © 2026 Freedreno / Turnip contributors
+ * SPDX-License-Identifier: MIT
+ */
+
+#define A6XX_PERFCNTRS_XML
+#include "tu5_formats.h"
+
+#include "common/fd5_hw.h"
+
+struct tu5_format {
+   enum a5xx_vtx_fmt vtx;
+   enum a5xx_tex_fmt tex;
+   enum a5xx_color_fmt rb;
+   enum a3xx_color_swap swap;
+   bool present;
+};
+
+#define FMT(pipe, vtxfmt, texfmt, rbfmt, swapfmt)                              \
+   [PIPE_FORMAT_##pipe] = {                                                    \
+      .vtx = (enum a5xx_vtx_fmt)(vtxfmt),                                      \
+      .tex = (enum a5xx_tex_fmt)(texfmt),                                      \
+      .rb = (enum a5xx_color_fmt)(rbfmt),                                      \
+      .swap = (swapfmt),                                                       \
+      .present = true,                                                         \
+   }
+
+#define VT(pipe, fmt, rbfmt, swapfmt)                                          \
+   FMT(pipe, VFMT5_##fmt, TFMT5_##fmt, RB5_##rbfmt, swapfmt)
+#define _T(pipe, fmt, rbfmt, swapfmt)                                          \
+   FMT(pipe, VFMT5_NONE, TFMT5_##fmt, RB5_##rbfmt, swapfmt)
+#define V_(pipe, fmt, rbfmt, swapfmt)                                          \
+   FMT(pipe, VFMT5_##fmt, TFMT5_NONE, RB5_##rbfmt, swapfmt)
+
+static const struct tu5_format formats[PIPE_FORMAT_COUNT] = {
+   /* 8-bit */
+   VT(R8_UNORM,   8_UNORM, R8_UNORM, WZYX),
+   _T(R8_SRGB,    8_UNORM, R8_UNORM, WZYX),
+   VT(R8_SNORM,   8_SNORM, R8_SNORM, WZYX),
+   VT(R8_UINT,    8_UINT,  R8_UINT,  WZYX),
+   VT(R8_SINT,    8_SINT,  R8_SINT,  WZYX),
+   V_(R8_USCALED, 8_UINT,  NONE,     WZYX),
+   V_(R8_SSCALED, 8_SINT,  NONE,     WZYX),
+
+   _T(A8_UNORM,   8_UNORM, A8_UNORM, WZYX),
+   _T(L8_UNORM,   8_UNORM, R8_UNORM, WZYX),
+   _T(L8_SNORM,   8_SNORM, R8_SNORM, WZYX),
+   _T(I8_UNORM,   8_UNORM, NONE,     WZYX),
+   _T(I8_SNORM,   8_SNORM, NONE,     WZYX),
+   _T(S8_UINT,    8_UINT,  R8_UINT,  WZYX),
+
+   /* 16-bit */
+   VT(R16_UNORM,   16_UNORM, R16_UNORM, WZYX),
+   VT(R16_SNORM,   16_SNORM, R16_SNORM, WZYX),
+   VT(R16_UINT,    16_UINT,  R16_UINT,  WZYX),
+   VT(R16_SINT,    16_SINT,  R16_SINT,  WZYX),
+   V_(R16_USCALED, 16_UINT,  NONE,      WZYX),
+   V_(R16_SSCALED, 16_SINT,  NONE,      WZYX),
+   VT(R16_FLOAT,   16_FLOAT, R16_FLOAT, WZYX),
+   _T(Z16_UNORM,   16_UNORM, R16_UNORM, WZYX),
+
+   VT(R8G8_UNORM,   8_8_UNORM, R8G8_UNORM, WZYX),
+   _T(R8G8_SRGB,    8_8_UNORM, R8G8_UNORM, WZYX),
+   VT(R8G8_SNORM,   8_8_SNORM, R8G8_SNORM, WZYX),
+   VT(R8G8_UINT,    8_8_UINT,  R8G8_UINT,  WZYX),
+   VT(R8G8_SINT,    8_8_SINT,  R8G8_SINT,  WZYX),
+   V_(R8G8_USCALED, 8_8_UINT,  NONE,       WZYX),
+   V_(R8G8_SSCALED, 8_8_SINT,  NONE,       WZYX),
+
+   _T(B5G6R5_UNORM,   5_6_5_UNORM,   R5G6B5_UNORM,   WXYZ),
+   _T(B5G5R5A1_UNORM, 5_5_5_1_UNORM, R5G5B5A1_UNORM, WXYZ),
+   _T(B5G5R5X1_UNORM, 5_5_5_1_UNORM, R5G5B5A1_UNORM, WXYZ),
+   _T(B4G4R4A4_UNORM, 4_4_4_4_UNORM, R4G4B4A4_UNORM, WXYZ),
+
+   /* 24-bit */
+   V_(R8G8B8_UNORM,   8_8_8_UNORM, NONE, WZYX),
+   V_(R8G8B8_SNORM,   8_8_8_SNORM, NONE, WZYX),
+   V_(R8G8B8_UINT,    8_8_8_UINT,  NONE, WZYX),
+   V_(R8G8B8_SINT,    8_8_8_SINT,  NONE, WZYX),
+   V_(R8G8B8_USCALED, 8_8_8_UINT,  NONE, WZYX),
+   V_(R8G8B8_SSCALED, 8_8_8_SINT,  NONE, WZYX),
+
+   /* 32-bit */
+   VT(R32_UINT,    32_UINT,  R32_UINT,  WZYX),
+   VT(R32_SINT,    32_SINT,  R32_SINT,  WZYX),
+   V_(R32_USCALED, 32_UINT,  NONE,      WZYX),
+   V_(R32_SSCALED, 32_SINT,  NONE,      WZYX),
+   VT(R32_FLOAT,   32_FLOAT, R32_FLOAT, WZYX),
+   V_(R32_FIXED,   32_FIXED, NONE,      WZYX),
+
+   VT(R16G16_UNORM,   16_16_UNORM, R16G16_UNORM, WZYX),
+   VT(R16G16_SNORM,   16_16_SNORM, R16G16_SNORM, WZYX),
+   VT(R16G16_UINT,    16_16_UINT,  R16G16_UINT,  WZYX),
+   VT(R16G16_SINT,    16_16_SINT,  R16G16_SINT,  WZYX),
+   VT(R16G16_USCALED, 16_16_UINT,  NONE,         WZYX),
+   VT(R16G16_SSCALED, 16_16_SINT,  NONE,         WZYX),
+   VT(R16G16_FLOAT,   16_16_FLOAT, R16G16_FLOAT, WZYX),
+
+   VT(R8G8B8A8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, WZYX),
+   _T(R8G8B8X8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, WZYX),
+   _T(R8G8B8A8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, WZYX),
+   _T(R8G8B8X8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, WZYX),
+   VT(R8G8B8A8_SNORM,   8_8_8_8_SNORM, R8G8B8A8_SNORM, WZYX),
+   VT(R8G8B8A8_UINT,    8_8_8_8_UINT,  R8G8B8A8_UINT,  WZYX),
+   VT(R8G8B8A8_SINT,    8_8_8_8_SINT,  R8G8B8A8_SINT,  WZYX),
+   V_(R8G8B8A8_USCALED, 8_8_8_8_UINT,  NONE,           WZYX),
+   V_(R8G8B8A8_SSCALED, 8_8_8_8_SINT,  NONE,           WZYX),
+
+   VT(B8G8R8A8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, WXYZ),
+   _T(B8G8R8X8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, WXYZ),
+   VT(B8G8R8A8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, WXYZ),
+   _T(B8G8R8X8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, WXYZ),
+
+   VT(A8B8G8R8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, XYZW),
+   _T(X8B8G8R8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, XYZW),
+   _T(A8B8G8R8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, XYZW),
+   _T(X8B8G8R8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, XYZW),
+
+   VT(A8R8G8B8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, ZYXW),
+   _T(X8R8G8B8_UNORM,   8_8_8_8_UNORM, R8G8B8A8_UNORM, ZYXW),
+   _T(A8R8G8B8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, ZYXW),
+   _T(X8R8G8B8_SRGB,    8_8_8_8_UNORM, R8G8B8A8_UNORM, ZYXW),
+
+   VT(R10G10B10A2_UNORM,   10_10_10_2_UNORM, R10G10B10A2_UNORM, WZYX),
+   VT(B10G10R10A2_UNORM,   10_10_10_2_UNORM, R10G10B10A2_UNORM, WXYZ),
+   _T(B10G10R10X2_UNORM,   10_10_10_2_UNORM, R10G10B10A2_UNORM, WXYZ),
+   V_(R10G10B10A2_SNORM,   10_10_10_2_SNORM, NONE,              WZYX),
+   V_(B10G10R10A2_SNORM,   10_10_10_2_SNORM, NONE,              WXYZ),
+   VT(R10G10B10A2_UINT,    10_10_10_2_UINT,  R10G10B10A2_UINT,  WZYX),
+   VT(B10G10R10A2_UINT,    10_10_10_2_UINT,  R10G10B10A2_UINT,  WXYZ),
+   V_(R10G10B10A2_USCALED, 10_10_10_2_UINT,  NONE,              WZYX),
+   V_(B10G10R10A2_USCALED, 10_10_10_2_UINT,  NONE,              WXYZ),
+   V_(R10G10B10A2_SSCALED, 10_10_10_2_SINT,  NONE,              WZYX),
+   V_(B10G10R10A2_SSCALED, 10_10_10_2_SINT,  NONE,              WXYZ),
+
+   VT(R11G11B10_FLOAT, 11_11_10_FLOAT, R11G11B10_FLOAT, WZYX),
+   _T(R9G9B9E5_FLOAT,  9_9_9_E5_FLOAT, NONE,            WZYX),
+
+   _T(Z24X8_UNORM,       X8Z24_UNORM,  R8G8B8A8_UNORM, WZYX),
+   _T(X24S8_UINT,        8_8_8_8_UINT, R8G8B8A8_UINT,  XYZW),
+   _T(Z24_UNORM_S8_UINT, X8Z24_UNORM,  R8G8B8A8_UNORM, WZYX),
+   _T(Z24_UNORM_S8_UINT_AS_R8G8B8A8, 8_8_8_8_UNORM, R8G8B8A8_UNORM, WZYX),
+   _T(Z32_FLOAT,         32_FLOAT,     R32_FLOAT,      WZYX),
+   _T(Z32_FLOAT_S8X24_UINT, 32_FLOAT,  R32_FLOAT,      WZYX),
+   _T(X32_S8X24_UINT,    8_UINT,       R8_UINT,        WZYX),
+
+   /* 48-bit */
+   V_(R16G16B16_UNORM,   16_16_16_UNORM, NONE, WZYX),
+   V_(R16G16B16_SNORM,   16_16_16_SNORM, NONE, WZYX),
+   V_(R16G16B16_UINT,    16_16_16_UINT,  NONE, WZYX),
+   V_(R16G16B16_SINT,    16_16_16_SINT,  NONE, WZYX),
+   V_(R16G16B16_USCALED, 16_16_16_UINT,  NONE, WZYX),
+   V_(R16G16B16_SSCALED, 16_16_16_SINT,  NONE, WZYX),
+   V_(R16G16B16_FLOAT,   16_16_16_FLOAT, NONE, WZYX),
+
+   /* 64-bit */
+   VT(R16G16B16A16_UNORM,   16_16_16_16_UNORM, R16G16B16A16_UNORM, WZYX),
+   VT(R16G16B16X16_UNORM,   16_16_16_16_UNORM, R16G16B16A16_UNORM, WZYX),
+   VT(R16G16B16A16_SNORM,   16_16_16_16_SNORM, R16G16B16A16_SNORM, WZYX),
+   VT(R16G16B16X16_SNORM,   16_16_16_16_SNORM, R16G16B16A16_SNORM, WZYX),
+   VT(R16G16B16A16_UINT,    16_16_16_16_UINT,  R16G16B16A16_UINT,  WZYX),
+   VT(R16G16B16X16_UINT,    16_16_16_16_UINT,  R16G16B16A16_UINT,  WZYX),
+   VT(R16G16B16A16_SINT,    16_16_16_16_SINT,  R16G16B16A16_SINT,  WZYX),
+   VT(R16G16B16X16_SINT,    16_16_16_16_SINT,  R16G16B16A16_SINT,  WZYX),
+   VT(R16G16B16A16_USCALED, 16_16_16_16_UINT,  NONE,               WZYX),
+   VT(R16G16B16A16_SSCALED, 16_16_16_16_SINT,  NONE,               WZYX),
+   VT(R16G16B16A16_FLOAT,   16_16_16_16_FLOAT, R16G16B16A16_FLOAT, WZYX),
+   VT(R16G16B16X16_FLOAT,   16_16_16_16_FLOAT, R16G16B16A16_FLOAT, WZYX),
+
+   VT(R32G32_UINT,    32_32_UINT,  R32G32_UINT,  WZYX),
+   VT(R32G32_SINT,    32_32_SINT,  R32G32_SINT,  WZYX),
+   V_(R32G32_USCALED, 32_32_UINT,  NONE,         WZYX),
+   V_(R32G32_SSCALED, 32_32_SINT,  NONE,         WZYX),
+   VT(R32G32_FLOAT,   32_32_FLOAT, R32G32_FLOAT, WZYX),
+   V_(R32G32_FIXED,   32_32_FIXED, NONE,         WZYX),
+
+   /* 96-bit */
+   VT(R32G32B32_UINT,    32_32_32_UINT,  NONE, WZYX),
+   VT(R32G32B32_SINT,    32_32_32_SINT,  NONE, WZYX),
+   V_(R32G32B32_USCALED, 32_32_32_UINT,  NONE, WZYX),
+   V_(R32G32B32_SSCALED, 32_32_32_SINT,  NONE, WZYX),
+   VT(R32G32B32_FLOAT,   32_32_32_FLOAT, NONE, WZYX),
+   V_(R32G32B32_FIXED,   32_32_32_FIXED, NONE, WZYX),
+
+   /* 128-bit */
+   VT(R32G32B32A32_UINT,    32_32_32_32_UINT,  R32G32B32A32_UINT,  WZYX),
+   _T(R32G32B32X32_UINT,    32_32_32_32_UINT,  R32G32B32A32_UINT,  WZYX),
+   VT(R32G32B32A32_SINT,    32_32_32_32_SINT,  R32G32B32A32_SINT,  WZYX),
+   _T(R32G32B32X32_SINT,    32_32_32_32_SINT,  R32G32B32A32_SINT,  WZYX),
+   V_(R32G32B32A32_USCALED, 32_32_32_32_UINT,  NONE,               WZYX),
+   V_(R32G32B32A32_SSCALED, 32_32_32_32_SINT,  NONE,               WZYX),
+   VT(R32G32B32A32_FLOAT,   32_32_32_32_FLOAT, R32G32B32A32_FLOAT, WZYX),
+   _T(R32G32B32X32_FLOAT,   32_32_32_32_FLOAT, R32G32B32A32_FLOAT, WZYX),
+   V_(R32G32B32A32_FIXED,   32_32_32_32_FIXED, NONE,               WZYX),
+
+   /* compressed */
+   _T(ETC1_RGB8,       ETC1,       NONE, WZYX),
+   _T(ETC2_RGB8,       ETC2_RGB8,  NONE, WZYX),
+   _T(ETC2_SRGB8,      ETC2_RGB8,  NONE, WZYX),
+   _T(ETC2_RGB8A1,     ETC2_RGB8A1,NONE, WZYX),
+   _T(ETC2_SRGB8A1,    ETC2_RGB8A1,NONE, WZYX),
+   _T(ETC2_RGBA8,      ETC2_RGBA8, NONE, WZYX),
+   _T(ETC2_SRGBA8,     ETC2_RGBA8, NONE, WZYX),
+   _T(ETC2_R11_UNORM,  ETC2_R11_UNORM, NONE, WZYX),
+   _T(ETC2_R11_SNORM,  ETC2_R11_SNORM, NONE, WZYX),
+   _T(ETC2_RG11_UNORM, ETC2_RG11_UNORM, NONE, WZYX),
+   _T(ETC2_RG11_SNORM, ETC2_RG11_SNORM, NONE, WZYX),
+
+   _T(DXT1_RGB,   DXT1, NONE, WZYX),
+   _T(DXT1_SRGB,  DXT1, NONE, WZYX),
+   _T(DXT1_RGBA,  DXT1, NONE, WZYX),
+   _T(DXT1_SRGBA, DXT1, NONE, WZYX),
+   _T(DXT3_RGBA,  DXT3, NONE, WZYX),
+   _T(DXT3_SRGBA, DXT3, NONE, WZYX),
+   _T(DXT5_RGBA,  DXT5, NONE, WZYX),
+   _T(DXT5_SRGBA, DXT5, NONE, WZYX),
+
+   _T(BPTC_RGBA_UNORM, BPTC,        NONE, WZYX),
+   _T(BPTC_SRGBA,      BPTC,        NONE, WZYX),
+   _T(BPTC_RGB_FLOAT,  BPTC_FLOAT,  NONE, WZYX),
+   _T(BPTC_RGB_UFLOAT, BPTC_UFLOAT, NONE, WZYX),
+
+   _T(RGTC1_UNORM, RGTC1_UNORM, NONE, WZYX),
+   _T(RGTC1_SNORM, RGTC1_SNORM, NONE, WZYX),
+   _T(RGTC2_UNORM, RGTC2_UNORM, NONE, WZYX),
+   _T(RGTC2_SNORM, RGTC2_SNORM, NONE, WZYX),
+
+   _T(ASTC_4x4,   ASTC_4x4,   NONE, WZYX),
+   _T(ASTC_5x4,   ASTC_5x4,   NONE, WZYX),
+   _T(ASTC_5x5,   ASTC_5x5,   NONE, WZYX),
+   _T(ASTC_6x5,   ASTC_6x5,   NONE, WZYX),
+   _T(ASTC_6x6,   ASTC_6x6,   NONE, WZYX),
+   _T(ASTC_8x5,   ASTC_8x5,   NONE, WZYX),
+   _T(ASTC_8x6,   ASTC_8x6,   NONE, WZYX),
+   _T(ASTC_8x8,   ASTC_8x8,   NONE, WZYX),
+   _T(ASTC_10x5,  ASTC_10x5,  NONE, WZYX),
+   _T(ASTC_10x6,  ASTC_10x6,  NONE, WZYX),
+   _T(ASTC_10x8,  ASTC_10x8,  NONE, WZYX),
+   _T(ASTC_10x10, ASTC_10x10, NONE, WZYX),
+   _T(ASTC_12x10, ASTC_12x10, NONE, WZYX),
+   _T(ASTC_12x12, ASTC_12x12, NONE, WZYX),
+
+   _T(ASTC_4x4_SRGB,   ASTC_4x4,   NONE, WZYX),
+   _T(ASTC_5x4_SRGB,   ASTC_5x4,   NONE, WZYX),
+   _T(ASTC_5x5_SRGB,   ASTC_5x5,   NONE, WZYX),
+   _T(ASTC_6x5_SRGB,   ASTC_6x5,   NONE, WZYX),
+   _T(ASTC_6x6_SRGB,   ASTC_6x6,   NONE, WZYX),
+   _T(ASTC_8x5_SRGB,   ASTC_8x5,   NONE, WZYX),
+   _T(ASTC_8x6_SRGB,   ASTC_8x6,   NONE, WZYX),
+   _T(ASTC_8x8_SRGB,   ASTC_8x8,   NONE, WZYX),
+   _T(ASTC_10x5_SRGB,  ASTC_10x5,  NONE, WZYX),
+   _T(ASTC_10x6_SRGB,  ASTC_10x6,  NONE, WZYX),
+   _T(ASTC_10x8_SRGB,  ASTC_10x8,  NONE, WZYX),
+   _T(ASTC_10x10_SRGB, ASTC_10x10, NONE, WZYX),
+   _T(ASTC_12x10_SRGB, ASTC_12x10, NONE, WZYX),
+   _T(ASTC_12x12_SRGB, ASTC_12x12, NONE, WZYX),
+};
+
+bool
+tu5_format_vtx_supported(enum pipe_format format)
+{
+   return format < PIPE_FORMAT_COUNT && formats[format].present &&
+          formats[format].vtx != VFMT5_NONE;
+}
+
+bool
+tu5_format_tex_supported(enum pipe_format format)
+{
+   return format < PIPE_FORMAT_COUNT && formats[format].present &&
+          formats[format].tex != TFMT5_NONE;
+}
+
+bool
+tu5_format_color_supported(enum pipe_format format)
+{
+   return format < PIPE_FORMAT_COUNT && formats[format].present &&
+          formats[format].rb != RB5_NONE;
+}
+
+struct tu5_native_format
+tu5_format_vtx(enum pipe_format format)
+{
+   if (!tu5_format_vtx_supported(format))
+      return { VFMT5_NONE, WZYX, false };
+   return { formats[format].vtx, formats[format].swap, true };
+}
+
+struct tu5_native_format
+tu5_format_color(enum pipe_format format, bool linear)
+{
+   if (!tu5_format_color_supported(format))
+      return { RB5_NONE, WZYX, false };
+   return {
+      formats[format].rb,
+      formats[format].swap,
+      true,
+   };
+}
+
+struct tu5_native_format
+tu5_format_texture(enum pipe_format format)
+{
+   if (!tu5_format_tex_supported(format))
+      return { TFMT5_NONE, WZYX, false };
+   return { formats[format].tex, formats[format].swap, true };
+}
+
+uint32_t
+tu5_pipe2depth(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_Z16_UNORM:
+      return DEPTH5_16;
+   case PIPE_FORMAT_Z24X8_UNORM:
+   case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+   case PIPE_FORMAT_X8Z24_UNORM:
+   case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+      return DEPTH5_24_8;
+   case PIPE_FORMAT_Z32_FLOAT:
+   case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+      return DEPTH5_32;
+   default:
+      return ~0u;
+   }
+}
+
+uint32_t
+tu5_ssbo_tex_fmt(enum pipe_format format)
+{
+   if (!tu5_format_tex_supported(format))
+      return TFMT5_NONE;
+   return formats[format].tex;
+}

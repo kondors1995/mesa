@@ -261,6 +261,7 @@ struct tu_graphics_pipeline {
     * Otherwise we should be able to precompile the draw state.
     */
    struct vk_sample_locations_state sample_locations;
+   struct vk_vertex_input_state vi;
 
    VkImageAspectFlags feedback_loops;
    bool feedback_loop_may_involve_textures;
@@ -328,5 +329,38 @@ tu_fill_render_pass_state(struct vk_render_pass_state *rp,
                           struct vk_multiview_state *mv,
                           const struct tu_render_pass *pass,
                           const struct tu_subpass *subpass);
+
+unsigned tu5_viewport_size(const struct vk_viewport_state *vp);
+void tu5_emit_viewport(struct tu_cs *cs,
+                       const struct vk_viewport_state *vp,
+                       const struct vk_rasterization_state *rs);
+unsigned tu5_scissor_size(const struct vk_viewport_state *vp);
+void tu5_emit_scissor(struct tu_cs *cs, const struct vk_viewport_state *vp);
+unsigned tu5_depth_bias_size(void);
+void tu5_emit_depth_bias(struct tu_cs *cs,
+                         const struct vk_rasterization_state *rs);
+unsigned tu5_blend_size(void);
+void tu5_emit_blend(struct tu_cs *cs,
+                    const struct vk_color_blend_state *cb,
+                    const struct vk_color_attachment_location_state *cal,
+                    const struct vk_render_pass_state *rp,
+                    bool alpha_to_coverage_enable,
+                    uint32_t sample_mask);
+unsigned tu5_blend_constants_size(void);
+void tu5_emit_blend_constants(struct tu_cs *cs,
+                              const struct vk_color_blend_state *cb);
+unsigned tu5_rast_size(void);
+void tu5_emit_rast(struct tu_cs *cs,
+                   const struct vk_rasterization_state *rs,
+                   const struct vk_viewport_state *vp);
+unsigned tu5_ds_size(void);
+void tu5_emit_ds(struct tu_cs *cs,
+                 const struct vk_depth_stencil_state *ds,
+                 const struct vk_render_pass_state *rp);
+unsigned tu5_rb_depth_cntl_size(void);
+void tu5_emit_rb_depth_cntl(struct tu_cs *cs,
+                            const struct vk_depth_stencil_state *ds,
+                            const struct vk_render_pass_state *rp,
+                            const struct vk_rasterization_state *rs);
 
 #endif /* TU_PIPELINE_H */

@@ -105,13 +105,17 @@ fdl6_lrz_get_fc_size(uint32_t lrz_layer_pitch, uint32_t array_layers)
    uint32_t lrz_fc_size =
       fdl6_lrz_get_full_fc_size(lrz_layer_pitch, array_layers);
 
-   /* The flag RAM holds at most 512 bytes on A6XX, 1024 on A7XX and 2048 on
-    * A8XX. Past that only a prefix of the LRZ image can be fast-cleared; the
-    * caller clears the rest (see fdl6_lrz_fc_first_uncovered_offset).
-    */
-   lrz_fc_size = MIN2(lrz_fc_size, (uint32_t) fd_lrzfc_layout<CHIP>::FC_SIZE);
+   if constexpr (CHIP == A5XX) {
+      return 0;
+   } else {
+      /* The flag RAM holds at most 512 bytes on A6XX, 1024 on A7XX and 2048 on
+       * A8XX. Past that only a prefix of the LRZ image can be fast-cleared; the
+       * caller clears the rest (see fdl6_lrz_fc_first_uncovered_offset).
+       */
+      lrz_fc_size = MIN2(lrz_fc_size, (uint32_t) fd_lrzfc_layout<CHIP>::FC_SIZE);
 
-   return lrz_fc_size;
+      return lrz_fc_size;
+   }
 }
 
 /* Whether the flag RAM covers the whole LRZ image, i.e. no remainder has to be
@@ -216,11 +220,13 @@ fdl6_lrz_layout_init(struct fdl_lrz_layout *lrz_layout,
    uint32_t lrz_size = lrz_layout->lrz_buffer_size *
       (CHIP >= A7XX ? 2 : 1);
 
-   if (dev_info->props.enable_lrz_fast_clear ||
-       dev_info->props.has_lrz_dir_tracking) {
-      lrz_layout->lrz_fc_offset =
-         lrz_layout->lrz_offset + lrz_size;
-      lrz_size += sizeof(fd_lrzfc_layout<CHIP>);
+   if constexpr (CHIP >= A6XX) {
+      if (dev_info->props.enable_lrz_fast_clear ||
+          dev_info->props.has_lrz_dir_tracking) {
+         lrz_layout->lrz_fc_offset =
+            lrz_layout->lrz_offset + lrz_size;
+         lrz_size += sizeof(fd_lrzfc_layout<CHIP>);
+      }
    }
 
    lrz_layout->lrz_total_size = lrz_size;

@@ -5,6 +5,7 @@
  */
 
 #include "tu_formats.h"
+#include "tu5_formats.h"
 
 #include "drm-uapi/drm_fourcc.h"
 
@@ -135,10 +136,17 @@ tu_physical_device_get_format_properties(
    const struct util_format_description *desc = util_format_description(format);
    const struct vk_format_ycbcr_info *ycbcr_info = vk_format_get_ycbcr_info(vk_format);
 
-   bool supported_vtx = tu6_format_vtx_supported(format);
-   bool supported_color = tu6_format_color_supported(physical_device->info, format);
-   bool supported_tex = fd6_texture_format_supported(physical_device->info, format,
-                                                     TILE6_LINEAR, false);
+   bool supported_vtx, supported_color, supported_tex;
+   if (physical_device->info->chip == 5) {
+      supported_vtx = tu5_format_vtx_supported(format);
+      supported_color = tu5_format_color_supported(format);
+      supported_tex = tu5_format_tex_supported(format);
+   } else {
+      supported_vtx = tu6_format_vtx_supported(format);
+      supported_color = tu6_format_color_supported(physical_device->info, format);
+      supported_tex = fd6_texture_format_supported(physical_device->info, format,
+                                                   TILE6_LINEAR, false);
+   }
 
    if ((format == PIPE_FORMAT_R64_UINT || format == PIPE_FORMAT_R64_SINT) &&
        physical_device->info->props.has_64b_image_atomics) {

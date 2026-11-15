@@ -118,6 +118,9 @@ tu6_emit_load_state(struct tu_device *device,
                     struct tu_pipeline *pipeline,
                     struct tu_pipeline_layout *layout)
 {
+   if (device->physical_device->info->chip == 5)
+      return;
+
    unsigned size = tu6_load_state_size(pipeline, layout);
    if (size == 0)
       return;
@@ -784,6 +787,11 @@ tu6_emit_vpc(struct tu_cs *cs,
              const struct ir3_shader_variant *gs,
              const struct ir3_shader_variant *fs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_vpc(cs, vs, fs);
+      return;
+   }
+
    const struct ir3_shader_variant *last_shader;
    if (gs) {
       last_shader = gs;
@@ -1204,6 +1212,9 @@ tu6_patch_control_points_size(struct tu_device *dev,
                               const struct tu_program_state *program,
                               uint32_t patch_control_points)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    if (dev->physical_device->info->props.load_shader_consts_via_preamble) {
 #define EMIT_CONST_DWORDS(const_dwords) (6 + const_dwords + 4)
       return EMIT_CONST_DWORDS(4) +
@@ -1349,6 +1360,19 @@ tu6_emit_program_config(struct tu_cs *cs,
                         const struct ir3_shader_variant **variants)
 {
    STATIC_ASSERT(MESA_SHADER_VERTEX == 0);
+
+   if constexpr (CHIP == A5XX) {
+      const struct ir3_shader_variant *vs = variants[MESA_SHADER_VERTEX];
+      const struct ir3_shader_variant *fs = variants[MESA_SHADER_FRAGMENT];
+      uint64_t vs_iova = shaders[MESA_SHADER_VERTEX]
+                            ? shaders[MESA_SHADER_VERTEX]->tu5_binary_iova
+                            : 0;
+      uint64_t fs_iova = shaders[MESA_SHADER_FRAGMENT]
+                            ? shaders[MESA_SHADER_FRAGMENT]->tu5_binary_iova
+                            : 0;
+      tu5_emit_program_config(cs, vs, fs, vs_iova, fs_iova);
+      return;
+   }
 
    tu_crb crb = cs->crb(0);
 
@@ -2466,6 +2490,9 @@ tu6_vertex_input_size(struct tu_device *dev,
                       const struct vk_vertex_input_state *vi,
                       unsigned attr_count)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    return 1 + 2 * attr_count;
 }
 
@@ -2475,6 +2502,9 @@ tu6_emit_vertex_input(struct tu_cs *cs,
                       const struct vk_vertex_input_state *vi,
                       unsigned attr_count)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (attr_count != 0)
       tu_cs_emit_pkt4(cs, REG_A6XX_VFD_FETCH_INSTR_INSTR(0), attr_count * 2);
 
@@ -2513,6 +2543,9 @@ static unsigned
 tu6_vertex_stride_size(struct tu_device *dev,
                        const struct vk_vertex_input_state *vi)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    return 1 + 2 * util_last_bit(vi->bindings_valid);
 }
 
@@ -2520,6 +2553,9 @@ template <chip CHIP>
 static void
 tu6_emit_vertex_stride(struct tu_cs *cs, const struct vk_vertex_input_state *vi)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (vi->bindings_valid) {
       unsigned bindings_count = util_last_bit(vi->bindings_valid);
       tu_crb crb = cs->crb(bindings_count);
@@ -2536,6 +2572,9 @@ tu6_vertex_stride_size_dyn(struct tu_device *dev,
                            const uint16_t *vi_binding_stride,
                            uint32_t bindings_valid)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    return 1 + 2 * util_last_bit(bindings_valid);
 }
 
@@ -2544,6 +2583,9 @@ static void
 tu6_emit_vertex_stride_dyn(struct tu_cs *cs, const uint16_t *vi_binding_stride,
                            uint32_t bindings_valid)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (bindings_valid) {
       unsigned bindings_count = util_last_bit(bindings_valid);
       tu_crb crb = cs->crb(bindings_count);
@@ -2579,6 +2621,9 @@ tu6_viewport_size(struct tu_device *dev,
                   const struct vk_viewport_state *vp,
                   const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_viewport_size(vp);
+
    return 1 + 2 * tu6_viewport_nregs<CHIP>(vp);
 }
 
@@ -2588,6 +2633,11 @@ tu6_emit_viewport(struct tu_cs *cs,
                   const struct vk_viewport_state *vp,
                   const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_viewport(cs, vp, rs);
+      return;
+   }
+
    VkExtent2D guardband = {511, 511};
    tu_crb crb = cs->crb(tu6_viewport_nregs<CHIP>(vp));
 
@@ -2864,6 +2914,9 @@ template <chip CHIP>
 static unsigned
 tu6_scissor_size(struct tu_device *dev, const struct vk_viewport_state *vp)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_scissor_size(vp);
+
    return 1 + vp->scissor_count * 2;
 }
 
@@ -2871,6 +2924,11 @@ template <chip CHIP>
 void
 tu6_emit_scissor(struct tu_cs *cs, const struct vk_viewport_state *vp)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_scissor(cs, vp);
+      return;
+   }
+
    tu_cs_emit_pkt4(cs, GRAS_SC_SCREEN_SCISSOR_TL(CHIP, 0).reg, vp->scissor_count * 2);
 
    for (uint32_t i = 0; i < vp->scissor_count; i++) {
@@ -3007,6 +3065,9 @@ static unsigned
 tu6_sample_locations_size(struct tu_device *dev, bool enable,
                           const struct vk_sample_locations_state *samp_loc)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    return 6 + (enable ? 9 : 0);
 }
 
@@ -3015,6 +3076,9 @@ void
 tu6_emit_sample_locations(struct tu_cs *cs, bool enable,
                           const struct vk_sample_locations_state *samp_loc)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    tu_cs_emit_regs(cs, GRAS_SC_MSAA_SAMPLE_POS_CNTL(CHIP,
       .location_enable = enable,
    ));
@@ -3079,6 +3143,9 @@ static unsigned
 tu6_depth_bias_size(struct tu_device *dev,
                     const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_depth_bias_size();
+
    return 4;
 }
 
@@ -3086,6 +3153,11 @@ template <chip CHIP>
 void
 tu6_emit_depth_bias(struct tu_cs *cs, const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_depth_bias(cs, rs);
+      return;
+   }
+
    tu_cs_emit_regs(cs,
       GRAS_SU_POLY_OFFSET_SCALE(CHIP, rs->depth_bias.slope_factor),
       GRAS_SU_POLY_OFFSET_OFFSET(CHIP, rs->depth_bias.constant_factor),
@@ -3302,6 +3374,9 @@ tu6_blend_size(struct tu_device *dev,
                bool alpha_to_one_enable,
                uint32_t sample_mask)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_blend_size();
+
    unsigned num_rts = alpha_to_coverage_enable ?
       MAX2(cb->attachment_count, 1) : cb->attachment_count;
    return 8 + 5 * num_rts;
@@ -3317,6 +3392,11 @@ tu6_emit_blend(struct tu_cs *cs,
                bool alpha_to_one_enable,
                uint32_t sample_mask)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_blend(cs, cb, cal, rp, alpha_to_coverage_enable, sample_mask);
+      return;
+   }
+
    bool rop_reads_dst = cb->logic_op_enable && tu_logic_op_reads_dst(static_cast<VkLogicOp>(cb->logic_op));
    enum a3xx_rop_code rop = tu6_rop(static_cast<VkLogicOp>(cb->logic_op));
    if (cs->device->physical_device->instance->drirc.misc.emulate_alpha_to_coverage)
@@ -3443,6 +3523,9 @@ static unsigned
 tu6_blend_constants_size(struct tu_device *dev,
                          const struct vk_color_blend_state *cb)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_blend_constants_size();
+
    return 5;
 }
 
@@ -3450,6 +3533,11 @@ template <chip CHIP>
 static void
 tu6_emit_blend_constants(struct tu_cs *cs, const struct vk_color_blend_state *cb)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_blend_constants(cs, cb);
+      return;
+   }
+
    tu_cs_emit_pkt4(cs, REG_A6XX_RB_BLEND_CONSTANT_RED_FP32, 4);
    tu_cs_emit_array(cs, reinterpret_cast<const uint32_t *>(cb->blend_constants), 4);
 }
@@ -3487,7 +3575,9 @@ tu6_rast_size(struct tu_device *dev,
               bool disable_fs,
               bool fdm)
 {
-   if (CHIP == A6XX && dev->physical_device->info->props.is_a702) {
+   if constexpr (CHIP == A5XX) {
+      return tu5_rast_size();
+   } else if (CHIP == A6XX && dev->physical_device->info->props.is_a702) {
       return 17;
    } else if (CHIP == A6XX) {
       return 15 + (dev->physical_device->info->props.has_legacy_pipeline_shading_rate ? 8 : 0);
@@ -3506,6 +3596,11 @@ tu6_emit_rast(struct tu_cs *cs,
               bool disable_fs,
               bool fdm)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_rast(cs, rs, vp);
+      return;
+   }
+
    enum a5xx_line_mode line_mode =
       rs->line.mode == VK_LINE_RASTERIZATION_MODE_BRESENHAM_KHR ?
       BRESENHAM : RECTANGULAR;
@@ -3660,6 +3755,9 @@ tu6_ds_size(struct tu_device *dev,
                  const struct vk_depth_stencil_state *ds,
                  const struct vk_render_pass_state *rp)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_ds_size();
+
    return 10;
 }
 
@@ -3669,6 +3767,11 @@ tu6_emit_ds(struct tu_cs *cs,
             const struct vk_depth_stencil_state *ds,
             const struct vk_render_pass_state *rp)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_ds(cs, ds, rp);
+      return;
+   }
+
    bool stencil_test_enable =
       ds->stencil.test_enable && rp->attachments & MESA_VK_RP_ATTACHMENT_STENCIL_BIT;
 
@@ -3728,6 +3831,9 @@ tu6_rb_depth_cntl_size(struct tu_device *dev,
                        const struct vk_render_pass_state *rp,
                        const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_rb_depth_cntl_size();
+
    return 7;
 }
 
@@ -3738,6 +3844,11 @@ tu6_emit_rb_depth_cntl(struct tu_cs *cs,
                        const struct vk_render_pass_state *rp,
                        const struct vk_rasterization_state *rs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_rb_depth_cntl(cs, ds, rp, rs);
+      return;
+   }
+
    if (rp->attachments & MESA_VK_RP_ATTACHMENT_DEPTH_BIT) {
       bool depth_test = ds->depth.test_enable;
       enum adreno_compare_func zfunc = tu6_compare_func(ds->depth.compare_op);
@@ -3792,6 +3903,9 @@ tu6_prim_mode_sysmem_size(struct tu_device *dev,
                           VkImageAspectFlags feedback_loops,
                           bool *sysmem_single_prim_mode)
 {
+   if constexpr (CHIP == A5XX)
+      return 0;
+
    return 2;
 }
 
@@ -3803,6 +3917,9 @@ tu6_emit_prim_mode_sysmem(struct tu_cs *cs,
                           VkImageAspectFlags feedback_loops,
                           bool *sysmem_single_prim_mode)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    /* VK_EXT_rasterization_order_attachment_access:
     *
     * This extension allow access to framebuffer attachments when used as both
@@ -3983,11 +4100,12 @@ tu_pipeline_builder_emit_state(struct tu_pipeline_builder *builder,
 #define DRAW_STATE(name, id, ...) DRAW_STATE_COND(name, id, true, __VA_ARGS__)
 
    DRAW_STATE_COND(vertex_input, TU_DYNAMIC_STATE_VERTEX_INPUT,
-                   pipeline->shaders[MESA_SHADER_VERTEX],
+                   CHIP != A5XX && pipeline->shaders[MESA_SHADER_VERTEX],
                    builder->graphics_state.vi,
                    pipeline->shaders[MESA_SHADER_VERTEX]->variant->attr_in);
-   DRAW_STATE(vertex_stride, TU_DYNAMIC_STATE_VB_STRIDE,
-              builder->graphics_state.vi);
+   DRAW_STATE_COND(vertex_stride, TU_DYNAMIC_STATE_VB_STRIDE,
+                   CHIP != A5XX,
+                   builder->graphics_state.vi);
    /* If (a) per-view viewport is used or (b) we don't know yet, then we need
     * to set viewport and stencil state dynamically.
     *
@@ -4154,6 +4272,11 @@ tu_pipeline_builder_emit_state(struct tu_pipeline_builder *builder,
 
    /* Vertex buffer state needs to know the max valid binding */
    BITSET_SET(keep, MESA_VK_DYNAMIC_VI_BINDINGS_VALID);
+   if constexpr (CHIP == A5XX) {
+      BITSET_SET(keep, MESA_VK_DYNAMIC_VI);
+      BITSET_SET(keep, MESA_VK_DYNAMIC_VI_BINDING_STRIDES);
+      BITSET_SET(keep, MESA_VK_DYNAMIC_RS_RASTERIZER_DISCARD_ENABLE);
+   }
 
    /* We might re-emit TU_DYNAMIC_STATE_DS or TU_DYNAMIC_STATE_RB_DEPTH_CNTL
     * depending on render pass attachments. Some of these overlap with the
@@ -4661,6 +4784,7 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
          tu_pipeline_to_graphics(*pipeline);
       gfx_pipeline->dynamic_state.ms.sample_locations =
          &gfx_pipeline->sample_locations;
+      gfx_pipeline->dynamic_state.vi = &gfx_pipeline->vi;
       vk_dynamic_graphics_state_fill(&gfx_pipeline->dynamic_state,
                                      &builder->graphics_state);
       gfx_pipeline->feedback_loops =

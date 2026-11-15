@@ -1036,6 +1036,104 @@ void
 tu7_set_thread_both_patchpoint(struct tu_cmd_buffer *cmd,
                                struct tu_cs *cs);
 
+struct tu_draw_state
+tu5_emit_consts(struct tu_cmd_buffer *cmd, bool compute);
+
+void
+tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
+                         VkPipelineBindPoint bind_point);
+
+void
+tu5_emit_vfd_index_offset(struct tu_cs *cs,
+                          uint32_t vertex_offset,
+                          uint32_t first_instance);
+
+void
+tu5_emit_vertex_buffers(struct tu_cmd_buffer *cmd);
+
+void
+tu5_emit_msaa(struct tu_cs *cs,
+              VkSampleCountFlagBits vk_samples,
+              bool msaa_disable);
+
+void
+tu5_emit_depth_plane(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
+
+void
+tu5_emit_pc_cntl(struct tu_cmd_buffer *cmd,
+                 struct tu_cs *cs,
+                 bool primitive_restart,
+                 bool provoking_vtx_last);
+
+void
+tu5_emit_restart_index(struct tu_cs *cs, uint32_t restart_index);
+
+void
+tu5_emit_fs_output_cntl(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
+
+void
+tu5_emit_cs_ndrange(struct tu_cs *cs,
+                    const uint16_t local_size[3],
+                    const uint32_t num_groups[3]);
+
+void
+tu5_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
+
+void
+tu5_emit_cache_invalidate(struct tu_cs *cs);
+
+void
+tu5_emit_lrz_flush(struct tu_cs *cs);
+
+void
+tu5_emit_rb_ccu_cntl(struct tu_cs *cs,
+                     const struct tu_physical_device *phys_dev,
+                     bool gmem);
+
+void
+tu5_set_render_mode(struct tu_cs *cs, enum render_mode_cmd mode);
+
+uint32_t
+tu5_always_on_counter_reg(void);
+
+void
+tu5_emit_sample_counter_cntl(struct tu_cs *cs);
+
+void
+tu5_emit_sample_counter_addr(struct tu_cs *cs, uint64_t iova);
+
+void
+tu5_emit_zs(struct tu_cmd_buffer *cmd,
+            const struct tu_subpass *subpass,
+            struct tu_cs *cs);
+
+void
+tu5_emit_mrt(struct tu_cmd_buffer *cmd,
+             const struct tu_subpass *subpass,
+             struct tu_cs *cs);
+
+void
+tu5_emit_bin_size(struct tu_cs *cs,
+                  uint32_t bin_w,
+                  uint32_t bin_h,
+                  bool bypass);
+
+void
+tu5_emit_render_cntl(struct tu_cmd_buffer *cmd,
+                     const struct tu_subpass *subpass,
+                     struct tu_cs *cs,
+                     bool binning);
+
+void
+tu5_emit_window_scissor(struct tu_cs *cs,
+                        uint32_t x1,
+                        uint32_t y1,
+                        uint32_t x2,
+                        uint32_t y2);
+
+void
+tu5_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1);
+
 /* For bin offsetting we want to do "Euclidean division," where the remainder
  * (i.e. the offset of the bin) is always positive. Unfortunately C/C++
  * remainder and division don't do this, so we have to implement it ourselves.

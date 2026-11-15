@@ -9,6 +9,7 @@
 
 #include "tu_sampler.h"
 
+#include "tu5_formats.h"
 #include "tu_device.h"
 #include "tu_util.h"
 
@@ -113,7 +114,9 @@ tu_CreateSampler(VkDevice _device,
    sampler->vk.ycbcr_conversion = ycbcr_conversion ?
       vk_ycbcr_conversion_from_handle(ycbcr_conversion->conversion) : NULL;
 
-   if (CHIP >= A8XX) {
+   if constexpr (CHIP == A5XX) {
+      tu5_sampler_init(sampler, pCreateInfo, border_color);
+   } else if (CHIP >= A8XX) {
       sampler->descriptor[0] =
          COND(miplinear, A8XX_TEX_SAMP_0_MIPFILTER_LINEAR_NEAR) |
          A8XX_TEX_SAMP_0_XY_MAG(tu6_tex_filter(pCreateInfo->magFilter, aniso)) |

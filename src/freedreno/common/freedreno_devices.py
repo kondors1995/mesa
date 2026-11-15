@@ -68,6 +68,19 @@ add_gpus([
         reg_size_vec4 = 48, # not measured the way a5xx was
     ))
 
+a5xx_base = GPUProps(
+        reg_size_vec4 = 64,
+        instr_cache_size = 64,
+        has_cp_reg_write = False,
+        vs_max_inputs_count = 32,
+        max_sets = 5,
+        line_width_min = 1.0,
+        line_width_max = 1.0,
+        max_draw_states = 32,
+        max_texel_buffer_range_elements = 1 << 27,
+        max_storage_buffer_range_bytes = 1 << 27,
+    )
+
 # FIXME: measure on the hardware
 add_gpus([
         GPUId(505),
@@ -104,6 +117,7 @@ add_gpus([
         highest_bank_bit = 14,
         threadsize_base = 32,
         reg_size_vec4 = 64,
+        template = [a5xx_base],
     ))
 
 # FIXME: measure on the hardware
@@ -123,6 +137,7 @@ add_gpus([
         highest_bank_bit = 14,
         threadsize_base = 32,
         reg_size_vec4 = 64,
+        template = [a5xx_base],
     ))
 
 add_gpus([
@@ -161,6 +176,7 @@ add_gpus([
         highest_bank_bit = 15,
         threadsize_base = 32,
         reg_size_vec4 = 64,
+        template = [a5xx_base],
     ))
 
 # Props could be modified with env var:

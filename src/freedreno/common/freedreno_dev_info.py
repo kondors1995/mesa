@@ -122,9 +122,10 @@ class GPUInfo(Struct):
                  cs_shared_mem_size, num_sp_cores, wave_granularity, fibers_per_sp,
                  highest_bank_bit = 0, ubwc_swizzle = 0x7, macrotile_mode = 0,
                  threadsize_base = 64, max_waves = 16, compute_lb_size = 0,
-                 reg_size_vec4 = 0):
+                 reg_size_vec4 = 0, template = None):
         self.chip          = chip.value
         self.props = Struct()
+        self.quirks = Struct()
         self.props.reg_size_vec4 = reg_size_vec4
         self.gmem_align_w  = gmem_align_w
         self.gmem_align_h  = gmem_align_h
@@ -142,6 +143,11 @@ class GPUInfo(Struct):
         self.highest_bank_bit = highest_bank_bit
         self.ubwc_swizzle = ubwc_swizzle
         self.macrotile_mode = macrotile_mode
+
+        if template:
+            templates = template if isinstance(template, list) else [template]
+            for tmpl in templates:
+                tmpl.apply_props(self)
 
         s.gpu_infos.append(self)
 

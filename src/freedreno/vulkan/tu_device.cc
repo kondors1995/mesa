@@ -206,6 +206,55 @@ get_device_extensions(const struct tu_physical_device *device,
                       struct vk_device_extension_table *ext)
 {
    bool has_gralloc = vk_android_get_ugralloc() != NULL;
+
+   if (device->info->chip == 5) {
+      *ext = (struct vk_device_extension_table) { .table = {
+         .KHR_8bit_storage = device->info->props.storage_8bit,
+         .KHR_16bit_storage = device->info->props.storage_16bit,
+         .KHR_bind_memory2 = true,
+         .KHR_copy_commands2 = true,
+         .KHR_create_renderpass2 = true,
+         .KHR_dedicated_allocation = true,
+         .KHR_depth_stencil_resolve = true,
+         .KHR_descriptor_update_template = true,
+         .KHR_driver_properties = true,
+         .KHR_external_fence = true,
+         .KHR_external_fence_fd = true,
+         .KHR_external_memory = true,
+         .KHR_external_memory_fd = true,
+         .KHR_external_semaphore = true,
+         .KHR_external_semaphore_fd = true,
+         .KHR_get_memory_requirements2 = true,
+         .KHR_image_format_list = true,
+         .KHR_imageless_framebuffer = true,
+         .KHR_index_type_uint8 = true,
+         .KHR_maintenance1 = true,
+         .KHR_maintenance2 = true,
+         .KHR_maintenance3 = true,
+         .KHR_push_descriptor = true,
+         .KHR_relaxed_block_layout = true,
+         .KHR_sampler_mirror_clamp_to_edge = true,
+         .KHR_separate_depth_stencil_layouts = true,
+         .KHR_shader_draw_parameters = true,
+         .KHR_storage_buffer_storage_class = true,
+#ifdef TU_USE_WSI_PLATFORM
+         .KHR_swapchain = true,
+         .KHR_swapchain_mutable_format = true,
+#endif
+         .KHR_uniform_buffer_standard_layout = true,
+         .KHR_variable_pointers = true,
+         .EXT_custom_border_color = true,
+         .EXT_external_memory_dma_buf = true,
+         .EXT_image_drm_format_modifier = true,
+         .EXT_index_type_uint8 = true,
+         .EXT_pipeline_creation_feedback = true,
+         .EXT_scalar_block_layout = true,
+         .ANDROID_external_memory_android_hardware_buffer = has_gralloc,
+         .ANDROID_native_buffer = has_gralloc,
+      } };
+      return;
+   }
+
    /* device->has_raytracing contains the value of the SW fuse. If the
     * device doesn't have a fuse (i.e. a740), we have to ignore it because
     * kgsl returns false. If it does have a fuse, enable raytracing if the
@@ -445,6 +494,72 @@ tu_get_features(struct tu_physical_device *pdevice,
                 struct vk_features *features)
 {
    *features = (struct vk_features) { false };
+
+   if (pdevice->info->chip == 5) {
+      /* Vulkan 1.0 */
+      features->robustBufferAccess = true;
+      features->fullDrawIndexUint32 = true;
+      features->imageCubeArray = true;
+      features->independentBlend = true;
+      features->geometryShader = false;
+      features->tessellationShader = false;
+      features->sampleRateShading = true;
+      features->dualSrcBlend = true;
+      features->logicOp = true;
+      features->multiDrawIndirect = true;
+      features->drawIndirectFirstInstance = true;
+      features->depthClamp = true;
+      features->depthBiasClamp = true;
+      features->fillModeNonSolid = true;
+      features->depthBounds = true;
+      features->wideLines = false;
+      features->largePoints = true;
+      features->alphaToOne = true;
+      features->multiViewport = true;
+      features->samplerAnisotropy = true;
+      features->textureCompressionETC2 = true;
+      features->textureCompressionASTC_LDR = true;
+      features->textureCompressionBC = true;
+      features->occlusionQueryPrecise = true;
+      features->pipelineStatisticsQuery = false;
+      features->vertexPipelineStoresAndAtomics = false;
+      features->fragmentStoresAndAtomics = true;
+      features->shaderTessellationAndGeometryPointSize = false;
+      features->shaderImageGatherExtended = true;
+      features->shaderStorageImageExtendedFormats = true;
+      features->shaderStorageImageMultisample = false;
+      features->shaderStorageImageReadWithoutFormat = false;
+      features->shaderStorageImageWriteWithoutFormat = true;
+      features->shaderUniformBufferArrayDynamicIndexing = false;
+      features->shaderSampledImageArrayDynamicIndexing = false;
+      features->shaderStorageBufferArrayDynamicIndexing = false;
+      features->shaderStorageImageArrayDynamicIndexing = false;
+      features->shaderClipDistance = false;
+      features->shaderCullDistance = false;
+      features->shaderFloat64 = false;
+      features->shaderInt64 = false;
+      features->shaderInt16 = false;
+      features->shaderResourceResidency = false;
+      features->shaderResourceMinLod = false;
+      features->variableMultisampleRate = true;
+      features->inheritedQueries = true;
+
+      /* Vulkan 1.1 */
+      features->storageBuffer16BitAccess = pdevice->info->props.storage_16bit;
+      features->variablePointersStorageBuffer = true;
+      features->variablePointers = true;
+      features->shaderDrawParameters = true;
+
+      /* Vulkan 1.2+ / extensions */
+      features->uniformBufferStandardLayout = true;
+      features->scalarBlockLayout = true;
+      features->imagelessFramebuffer = true;
+      features->separateDepthStencilLayouts = true;
+      features->customBorderColors = true;
+      features->customBorderColorWithoutFormat = true;
+      features->indexTypeUint8 = true;
+      return;
+   }
 
    /* Vulkan 1.0 */
    features->robustBufferAccess = true;
@@ -977,15 +1092,19 @@ tu_get_physical_device_properties_1_1(struct tu_physical_device *pdevice,
 
    p->subgroupSize = tu_subgroup_size(pdevice);
    p->subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
-   p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
-                                    VK_SUBGROUP_FEATURE_VOTE_BIT |
-                                    VK_SUBGROUP_FEATURE_BALLOT_BIT |
-                                    VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-                                    VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
-                                    VK_SUBGROUP_FEATURE_ROTATE_BIT_KHR |
-                                    VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT_KHR |
-                                    VK_SUBGROUP_FEATURE_CLUSTERED_BIT |
-                                    VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+   if (pdevice->info->chip == 5) {
+      p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
+   } else {
+      p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
+                                       VK_SUBGROUP_FEATURE_VOTE_BIT |
+                                       VK_SUBGROUP_FEATURE_BALLOT_BIT |
+                                       VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+                                       VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
+                                       VK_SUBGROUP_FEATURE_ROTATE_BIT_KHR |
+                                       VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT_KHR |
+                                       VK_SUBGROUP_FEATURE_CLUSTERED_BIT |
+                                       VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+   }
    if (pdevice->info->props.has_getfiberid) {
       p->subgroupSupportedStages |= VK_SHADER_STAGE_ALL_GRAPHICS;
       p->subgroupSupportedOperations |= VK_SUBGROUP_FEATURE_QUAD_BIT;
@@ -1208,27 +1327,45 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->bufferImageGranularity = 64;          /* A cache line */
    props->sparseAddressSpaceSize = pdevice->va_size;
    props->maxBoundDescriptorSets = pdevice->usable_sets;
-   props->maxPerStageDescriptorSamplers = max_descriptor_set_size;
-   props->maxPerStageDescriptorUniformBuffers = max_descriptor_set_size;
-   props->maxPerStageDescriptorStorageBuffers = max_descriptor_set_size;
-   props->maxPerStageDescriptorSampledImages = max_descriptor_set_size;
-   props->maxPerStageDescriptorStorageImages = max_descriptor_set_size;
-   props->maxPerStageDescriptorInputAttachments = MAX_RTS;
-   props->maxPerStageResources = max_descriptor_set_size;
-   props->maxDescriptorSetSamplers = max_descriptor_set_size;
-   props->maxDescriptorSetUniformBuffers = max_descriptor_set_size;
-   props->maxDescriptorSetUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS;
-   props->maxDescriptorSetStorageBuffers = max_descriptor_set_size;
-   props->maxDescriptorSetStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS;
-   props->maxDescriptorSetSampledImages = max_descriptor_set_size;
-   props->maxDescriptorSetStorageImages = max_descriptor_set_size;
-   props->maxDescriptorSetInputAttachments = MAX_RTS;
+   if (pdevice->info->chip == 5) {
+      props->maxPerStageDescriptorSamplers = 16;
+      props->maxPerStageDescriptorUniformBuffers = 15;
+      props->maxPerStageDescriptorStorageBuffers = 16;
+      props->maxPerStageDescriptorSampledImages = 128;
+      props->maxPerStageDescriptorStorageImages = 8;
+      props->maxPerStageDescriptorInputAttachments = MAX_RTS;
+      props->maxPerStageResources = 128;
+      props->maxDescriptorSetSamplers = 80;
+      props->maxDescriptorSetUniformBuffers = 75;
+      props->maxDescriptorSetUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS;
+      props->maxDescriptorSetStorageBuffers = 80;
+      props->maxDescriptorSetStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS;
+      props->maxDescriptorSetSampledImages = 512;
+      props->maxDescriptorSetStorageImages = 32;
+      props->maxDescriptorSetInputAttachments = MAX_RTS;
+   } else {
+      props->maxPerStageDescriptorSamplers = max_descriptor_set_size;
+      props->maxPerStageDescriptorUniformBuffers = max_descriptor_set_size;
+      props->maxPerStageDescriptorStorageBuffers = max_descriptor_set_size;
+      props->maxPerStageDescriptorSampledImages = max_descriptor_set_size;
+      props->maxPerStageDescriptorStorageImages = max_descriptor_set_size;
+      props->maxPerStageDescriptorInputAttachments = MAX_RTS;
+      props->maxPerStageResources = max_descriptor_set_size;
+      props->maxDescriptorSetSamplers = max_descriptor_set_size;
+      props->maxDescriptorSetUniformBuffers = max_descriptor_set_size;
+      props->maxDescriptorSetUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS;
+      props->maxDescriptorSetStorageBuffers = max_descriptor_set_size;
+      props->maxDescriptorSetStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS;
+      props->maxDescriptorSetSampledImages = max_descriptor_set_size;
+      props->maxDescriptorSetStorageImages = max_descriptor_set_size;
+      props->maxDescriptorSetInputAttachments = MAX_RTS;
+   }
    props->maxVertexInputAttributes = pdevice->info->props.vs_max_inputs_count;
    props->maxVertexInputBindings = pdevice->info->props.vs_max_inputs_count;
    props->maxVertexInputAttributeOffset = 4095;
    props->maxVertexInputBindingStride = 2048;
    props->maxVertexOutputComponents = pdevice->info->props.is_a702 ? 64 : 128;
-   if (!pdevice->info->props.is_a702) {
+   if (pdevice->info->chip >= 6 && !pdevice->info->props.is_a702) {
       props->maxTessellationGenerationLevel = 64;
       props->maxTessellationPatchSize = 32;
       props->maxTessellationControlPerVertexInputComponents = 128;
@@ -1318,7 +1455,8 @@ tu_get_properties(struct tu_physical_device *pdevice,
 
    props->apiVersion =
       ((pdevice->info->chip >= 7) ? TU_API_VERSION :
-         VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION));
+       (pdevice->info->chip == 6) ? VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION) :
+                                    VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION));
    props->driverVersion = vk_get_driver_version();
    props->vendorID = pdevice->instance->drirc.debug.force_vk_vendor != 0 ?
                      pdevice->instance->drirc.debug.force_vk_vendor : 0x5143;
@@ -1740,16 +1878,21 @@ tu_physical_device_init(struct tu_physical_device *device,
    }
 
    switch (fd_dev_gen(&device->dev_id)) {
+   case 5:
    case 6:
    case 7:
    case 8: {
       device->dev_info = info;
       device->info = &device->dev_info;
 
-      device->usable_gmem_size_gmem =
-         fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
-                                     &device->config_gmem,
-                                     &device->config_sysmem);
+      if (fd_dev_gen(&device->dev_id) == 5) {
+         device->usable_gmem_size_gmem = device->gmem_size;
+      } else {
+         device->usable_gmem_size_gmem =
+            fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
+                                        &device->config_gmem,
+                                        &device->config_sysmem);
+      }
 
       if (!instance->drirc.misc.dont_reserve_descriptor_set) {
          device->usable_sets = device->reserved_set_idx = device->info->props.max_sets - 1;
@@ -2310,7 +2453,7 @@ tu_trace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
    struct tu_suballoc_bo *bo = static_cast<struct tu_suballoc_bo *>(timestamps);
    struct tu_cs *ts_cs = static_cast<struct tu_cs *>(cs);
 
-   if (CHIP == A6XX) {
+   if (CHIP <= A6XX) {
       tu_cs_emit_pkt7(ts_cs, CP_EVENT_WRITE, 4);
       tu_cs_emit(ts_cs, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS) |
                            CP_EVENT_WRITE_0_TIMESTAMP);
@@ -2628,6 +2771,9 @@ tu_cs_dbg_stomp_regs(struct tu_cs *cs,
                      uint32_t last_reg,
                      bool inverse)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (is_rp_blit) {
       stomp_regs<CHIP>(cs, &DRAW_REGS<CHIP>[0], ARRAY_SIZE(DRAW_REGS<CHIP>),
                        first_reg, last_reg, inverse);
@@ -2862,6 +3008,10 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       &dispatch_table, &tu_device_entrypoints, override_initial_entrypoints);
 
    switch (fd_dev_gen(&physical_device->dev_id)) {
+   case 5:
+      vk_device_dispatch_table_from_entrypoints(
+         &dispatch_table, &tu_device_entrypoints_a5xx, false);
+      break;
    case 6:
       vk_device_dispatch_table_from_entrypoints(
          &dispatch_table, &tu_device_entrypoints_a6xx, false);
@@ -3013,13 +3163,14 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
 
    {
       struct ir3_compiler_options ir3_options = {
-         .push_ubo_with_preamble = true,
+         .push_ubo_with_preamble = physical_device->info->chip >= 6,
          .disable_cache = true,
          .bindless_fb_read_descriptor = -1,
          .bindless_fb_read_slot = -1,
          .storage_16bit = physical_device->info->props.storage_16bit,
          .storage_8bit = physical_device->info->props.storage_8bit,
-         .shared_push_consts = !TU_DEBUG(PUSH_CONSTS_PER_STAGE),
+         .shared_push_consts = physical_device->info->chip >= 6 &&
+            !TU_DEBUG(PUSH_CONSTS_PER_STAGE),
          .uche_trap_base = physical_device->uche_trap_base,
       };
       device->compiler = ir3_compiler_create(

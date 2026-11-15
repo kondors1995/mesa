@@ -116,6 +116,9 @@ template <chip CHIP>
 static void
 tu6_emit_lrz_buffer(struct tu_cs *cs, struct tu_image *depth_image)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    tu_crb crb = cs->crb(8);
 
    if (!depth_image) {
@@ -201,6 +204,9 @@ template <chip CHIP>
 static void
 tu_lrz_emit_force_disable_for_rp(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    cmd->state.rp.lrz_disable_for_next_rp = true;
 
    if (CHIP >= A7XX) {
@@ -624,6 +630,9 @@ template <chip CHIP>
 void
 tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    /* TODO: If lrz was never valid for the entire renderpass, we could exit
     * early here. Sometimes we know this ahead of time and null out
     * image_view, but with LOAD_OP_DONT_CARE this only happens if there were
@@ -884,6 +893,9 @@ template <chip CHIP>
 void
 tu_lrz_tiling_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (cmd->state.lrz.fast_clear || cmd->state.lrz.gpu_dir_tracking) {
       tu6_emit_lrz_buffer<CHIP>(cs, cmd->state.lrz.image_view->image);
 
@@ -936,6 +948,9 @@ template <chip CHIP>
 void
 tu_lrz_sysmem_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (cmd->device->physical_device->info->props.has_lrz_feedback) {
       tu_lrz_tiling_begin<CHIP>(cmd, cs);
       return;
@@ -971,6 +986,9 @@ template <chip CHIP>
 void
 tu_lrz_sysmem_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    if (cmd->device->physical_device->info->props.has_lrz_feedback) {
       tu_lrz_tiling_end<CHIP>(cmd, cs);
       return;
@@ -1108,6 +1126,9 @@ template <chip CHIP>
 static void
 tu_lrz_emit_disable_write_for_rp(struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    /* Don't disable LRZ feedback during sysmem rendering or per-tile rendering. */
    tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) | CP_COND_REG_EXEC_0_BINNING);
 
@@ -1566,6 +1587,9 @@ template <chip CHIP>
 void
 tu6_emit_lrz(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX)
+      return;
+
    const uint32_t a = cmd->state.subpass->depth_stencil_attachment.attachment;
    struct __GRAS_LRZ_CNTL gras_lrz_cntl = tu6_calculate_lrz_state<CHIP>(cmd, a);
 

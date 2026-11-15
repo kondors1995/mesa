@@ -22,6 +22,7 @@ fdl5_layout_image(struct fdl_layout *layout, const struct fdl_image_params *para
    layout->width0 = params->width0;
    layout->height0 = params->height0;
    layout->depth0 = params->depth0;
+   layout->mip_levels = params->mip_levels;
 
    layout->cpp = util_format_get_blocksize(params->format);
    layout->cpp *= params->nr_samples;
@@ -32,6 +33,7 @@ fdl5_layout_image(struct fdl_layout *layout, const struct fdl_image_params *para
    layout->layer_first = !params->is_3d;
 
    layout->tile_mode = params->tile_mode;
+   layout->base_align = layout->tile_mode ? 4096 : 64;
    layout->linear_fallback_threshold_texels = FDL_LINEAR_FALLBACK_THRESHOLD;
 
    uint32_t heightalign = layout->cpp == 1 ? 32 : 16;

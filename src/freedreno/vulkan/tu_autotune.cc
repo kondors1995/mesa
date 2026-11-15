@@ -666,8 +666,11 @@ struct tu_autotune::rp_entry {
 
    void emit_metric_timestamp(struct tu_cs *cs, uint64_t timestamp_iova)
    {
+      uint32_t reg = device->physical_device->info->chip == 5 ?
+         tu5_always_on_counter_reg() :
+         TU_CALLX(device, __CP_ALWAYS_ON_COUNTER)({}).reg;
       tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-      tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(TU_CALLX(device, __CP_ALWAYS_ON_COUNTER)({}).reg) | CP_REG_TO_MEM_0_CNT(2) |
+      tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(reg) | CP_REG_TO_MEM_0_CNT(2) |
                         CP_REG_TO_MEM_0_IS_64B);
       tu_cs_emit_qw(cs, timestamp_iova);
    }
@@ -2022,8 +2025,11 @@ tu_autotune::write_preempt_counters_to_iova(struct tu_cs *cs,
    tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(always_count_counter->counter_reg_lo) | CP_REG_TO_MEM_0_IS_64B);
    tu_cs_emit_qw(cs, always_count_iova);
 
+   uint32_t aon_reg = device->physical_device->info->chip == 5 ?
+      tu5_always_on_counter_reg() :
+      TU_CALLX(device, __CP_ALWAYS_ON_COUNTER)({}).reg;
    tu_cs_emit_pkt7(cs, CP_REG_TO_MEM, 3);
-   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(TU_CALLX(device, __CP_ALWAYS_ON_COUNTER)({}).reg) | CP_REG_TO_MEM_0_CNT(2) |
+   tu_cs_emit(cs, CP_REG_TO_MEM_0_REG(aon_reg) | CP_REG_TO_MEM_0_CNT(2) |
                      CP_REG_TO_MEM_0_IS_64B);
    tu_cs_emit_qw(cs, aon_iova);
 }

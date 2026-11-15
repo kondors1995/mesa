@@ -18,6 +18,7 @@
  */
 
 #include "tu_descriptor_set.h"
+#include "tu5_formats.h"
 
 #include "util/mesa-blake3.h"
 #include "util/format/u_format.h"
@@ -1005,9 +1006,15 @@ write_texel_buffer_descriptor_addr(uint32_t *dst,
    } else {
       uint8_t swiz[4] = { PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y, PIPE_SWIZZLE_Z,
                           PIPE_SWIZZLE_W };
-      fdl6_buffer_view_init<CHIP>(dst,
-                                  vk_format_to_pipe_format(buffer_info->format),
-                                  swiz, buffer_info->address, buffer_info->range);
+      if constexpr (CHIP == A5XX) {
+         tu5_buffer_view_init(dst,
+                              vk_format_to_pipe_format(buffer_info->format),
+                              swiz, buffer_info->address, buffer_info->range);
+      } else {
+         fdl6_buffer_view_init<CHIP>(dst,
+                                     vk_format_to_pipe_format(buffer_info->format),
+                                     swiz, buffer_info->address, buffer_info->range);
+      }
    }
 }
 
@@ -1158,22 +1165,33 @@ write_buffer_descriptor_addr(const struct tu_device *device,
    uint64_t va = buffer_info->address;
    uint32_t range = buffer_info->range;
 
-   if (info->props.storage_16bit) {
-      fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R16_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
-      dst += FDL6_TEX_CONST_DWORDS;
-   }
+   if constexpr (CHIP == A5XX) {
+      tu5_buffer_view_init(dst, PIPE_FORMAT_R32_UINT, tu_swiz(X, Y, Z, W), va, range);
+      uint32_t ssbo0[4], ssbo1[2];
+      tu5_fill_storage_buffer_desc(ssbo0, ssbo1, va, range, PIPE_FORMAT_NONE);
+      dst[12] = ssbo0[0];
+      dst[13] = ssbo0[1];
+      dst[14] = ssbo1[0];
+      dst[15] = ssbo1[1];
+      return;
+   } else {
+      if (info->props.storage_16bit) {
+         fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R16_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
+         dst += FDL6_TEX_CONST_DWORDS;
+      }
 
-   /* Set up the 32-bit descriptor when 16-bit storage isn't supported or the
-    * 16-bit descriptor cannot be used for 32-bit loads through isam.v.
-    */
-   if (!info->props.storage_16bit || !info->props.has_isam_v) {
-      fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
-      dst += FDL6_TEX_CONST_DWORDS;
-   }
+      /* Set up the 32-bit descriptor when 16-bit storage isn't supported or the
+       * 16-bit descriptor cannot be used for 32-bit loads through isam.v.
+       */
+      if (!info->props.storage_16bit || !info->props.has_isam_v) {
+         fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
+         dst += FDL6_TEX_CONST_DWORDS;
+      }
 
-   if (info->props.storage_8bit) {
-      fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R8_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
-      dst += FDL6_TEX_CONST_DWORDS;
+      if (info->props.storage_8bit) {
+         fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R8_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
+         dst += FDL6_TEX_CONST_DWORDS;
+      }
    }
 }
 
@@ -1299,9 +1317,13 @@ write_accel_struct(uint32_t *dst, uint64_t va, uint32_t max_texel_elements)
     * Therefore just always specify the maximum possible size to avoid having
     * to keep track of the size.
     */
-   fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT,
-                               tu_swiz(X, X, X, X), va,
-                               max_texel_elements, AS_RECORD_SIZE / 4);
+   if constexpr (CHIP == A5XX) {
+      memset(dst, 0, FDL6_TEX_CONST_DWORDS * sizeof(uint32_t));
+   } else {
+      fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT,
+                                  tu_swiz(X, X, X, X), va,
+                                  max_texel_elements, AS_RECORD_SIZE / 4);
+   }
 }
 
 /* note: this is used with immutable samplers in push descriptors */

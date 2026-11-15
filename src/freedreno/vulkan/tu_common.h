@@ -189,9 +189,40 @@ struct tu_rect2d_float {
 };
 
 
-#define TU_GENX(FUNC_NAME) FD_GENX(FUNC_NAME)
+#define __TU_GPU_GENS A5XX, A6XX, A7XX, A8XX
 
-#define TU_CALLX(device, thing) FD_CALLX((device)->physical_device->info, thing)
+#define TU_GENX(FUNC_NAME)                                                   \
+   template <chip... CHIPs> constexpr auto FUNC_NAME##instantiate()          \
+   {                                                                         \
+      return std::tuple_cat(std::make_tuple(FUNC_NAME<CHIPs>)...);           \
+   }                                                                         \
+   static constexpr auto FUNC_NAME##tmpl __attribute__((used)) =             \
+      FUNC_NAME##instantiate<__TU_GPU_GENS>();
+
+#define TU_CALLX_INFO(info, thing)                                           \
+   ({                                                                        \
+      decltype(&thing<A6XX>) genX_thing;                                     \
+      switch ((info)->chip) {                                                \
+      case 5:                                                                \
+         genX_thing = &thing<A5XX>;                                          \
+         break;                                                              \
+      case 6:                                                                \
+         genX_thing = &thing<A6XX>;                                          \
+         break;                                                              \
+      case 7:                                                                \
+         genX_thing = &thing<A7XX>;                                          \
+         break;                                                              \
+      case 8:                                                                \
+         genX_thing = &thing<A8XX>;                                          \
+         break;                                                              \
+      default:                                                               \
+         UNREACHABLE("Unknown hardware generation");                         \
+      }                                                                      \
+      genX_thing;                                                            \
+   })
+
+#define TU_CALLX(device, thing)                                              \
+   TU_CALLX_INFO((device)->physical_device->info, thing)
 
 /* vk object types */
 struct tu_buffer;

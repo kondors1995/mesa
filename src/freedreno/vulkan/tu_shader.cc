@@ -333,12 +333,203 @@ lower_load_push_constant(struct tu_device *dev,
    nir_def_replace(&instr->def, load);
 }
 
+static uint32_t
+tu5_alloc_binding(struct tu5_binding_ref *arr,
+                  uint8_t *count,
+                  uint8_t max_count,
+                  uint8_t set,
+                  uint16_t binding,
+                  uint32_t array_index,
+                  bool is_dynamic,
+                  bool is_input_attachment)
+{
+   for (uint8_t i = 0; i < *count; i++) {
+      if (arr[i].set == set && arr[i].binding == binding &&
+          arr[i].array_index == array_index)
+         return i;
+   }
+
+   assert(*count < max_count);
+   if (*count >= max_count)
+      return max_count - 1;
+
+   uint32_t idx = (*count)++;
+   arr[idx] = (struct tu5_binding_ref) {
+      .set = set,
+      .is_dynamic = is_dynamic,
+      .has_immutable_sampler = 0,
+      .is_input_attachment = is_input_attachment,
+      .binding = binding,
+      .array_index = array_index,
+   };
+   return idx;
+}
+
+static uint32_t
+tu5_alloc_binding_range(struct tu5_binding_ref *arr,
+                        uint8_t *count,
+                        uint8_t max_count,
+                        uint8_t set,
+                        uint16_t binding,
+                        uint32_t array_size,
+                        bool is_dynamic,
+                        bool is_input_attachment)
+{
+   if (array_size <= 1)
+      return tu5_alloc_binding(arr, count, max_count, set, binding, 0,
+                               is_dynamic, is_input_attachment);
+
+   for (uint8_t i = 0; i + array_size <= *count; i++) {
+      bool match = true;
+      for (uint32_t k = 0; k < array_size; k++) {
+         if (arr[i + k].set != set || arr[i + k].binding != binding ||
+             arr[i + k].array_index != k) {
+            match = false;
+            break;
+         }
+      }
+      if (match)
+         return i;
+   }
+
+   uint32_t base = *count;
+   for (uint32_t k = 0; k < array_size; k++) {
+      assert(*count < max_count);
+      if (*count >= max_count)
+         break;
+      uint32_t idx = (*count)++;
+      arr[idx] = (struct tu5_binding_ref) {
+         .set = set,
+         .is_dynamic = is_dynamic,
+         .has_immutable_sampler = 0,
+         .is_input_attachment = is_input_attachment,
+         .binding = binding,
+         .array_index = k,
+      };
+   }
+   return base;
+}
+
+static void
+tu5_lower_vulkan_resource_index(nir_builder *b,
+                                nir_intrinsic_instr *instr,
+                                struct tu_shader *shader,
+                                const struct tu_pipeline_layout *layout)
+{
+   unsigned set = nir_intrinsic_desc_set(instr);
+   unsigned binding = nir_intrinsic_binding(instr);
+   const struct tu_descriptor_set_layout *set_layout = layout->set[set].layout;
+   const struct tu_descriptor_set_binding_layout *binding_layout =
+      &set_layout->binding[binding];
+
+   if (binding_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+      return;
+
+   shader->active_desc_sets |= 1u << set;
+
+   bool is_ubo =
+      binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+      binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+   bool is_dynamic = vk_descriptor_type_is_dynamic(binding_layout->type);
+   uint32_t array_size = MAX2(binding_layout->array_size, 1);
+
+   struct tu5_binding_ref *arr =
+      is_ubo ? shader->tu5_bindings->ubo : shader->tu5_bindings->ssbo;
+   uint8_t *count =
+      is_ubo ? &shader->tu5_bindings->num_ubo : &shader->tu5_bindings->num_ssbo;
+   uint8_t max_count = is_ubo ? TU5_MAX_UBO_BINDINGS : TU5_MAX_SSBO_BINDINGS;
+
+   nir_def *def;
+   if (nir_src_is_const(instr->src[0]) && array_size == 1) {
+      uint32_t slot = tu5_alloc_binding(arr, count, max_count, set, binding,
+                                        0, is_dynamic, false);
+      def = nir_vec3(b, nir_imm_int(b, slot), nir_imm_int(b, 0), nir_imm_int(b, 0));
+   } else {
+      uint32_t base = tu5_alloc_binding_range(arr, count, max_count, set, binding,
+                                              array_size, is_dynamic, false);
+      def = nir_vec3(b, nir_imm_int(b, base), instr->src[0].ssa, nir_imm_int(b, 0));
+   }
+
+   nir_def_replace(&instr->def, def);
+}
+
+static bool
+tu5_lower_ssbo_ubo_intrinsic(struct tu_device *dev,
+                             nir_builder *b,
+                             nir_intrinsic_instr *intrin)
+{
+   unsigned buffer_src = (intrin->intrinsic == nir_intrinsic_store_ssbo) ? 1 : 0;
+
+   if (intrin->src[buffer_src].ssa->num_components == 1)
+      return false;
+
+   if (intrin->intrinsic == nir_intrinsic_load_ubo &&
+       dev->physical_device->compiler_options.allow_oob_indirect_ubo_loads) {
+      nir_scalar offset = nir_scalar_resolved(intrin->src[1].ssa, 0);
+      if (!nir_scalar_is_const(offset)) {
+         nir_intrinsic_set_range(intrin, ~0);
+      }
+   }
+
+   nir_def *base = nir_channel(b, intrin->src[buffer_src].ssa, 0);
+   nir_def *idx = nir_channel(b, intrin->src[buffer_src].ssa, 1);
+   nir_src_rewrite(&intrin->src[buffer_src], nir_iadd(b, base, idx));
+   return true;
+}
+
+static void
+tu5_lower_image_deref(nir_builder *b,
+                      nir_intrinsic_instr *instr,
+                      struct tu_shader *shader,
+                      const struct tu_pipeline_layout *layout)
+{
+   nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+   nir_variable *var = nir_deref_instr_get_variable(deref);
+   unsigned set = var->data.descriptor_set;
+   unsigned binding = var->data.binding;
+   const struct tu_descriptor_set_layout *set_layout = layout->set[set].layout;
+   const struct tu_descriptor_set_binding_layout *binding_layout =
+      &set_layout->binding[binding];
+
+   shader->active_desc_sets |= 1u << set;
+
+   uint32_t array_size = MAX2(binding_layout->array_size, 1);
+   nir_def *idx;
+   if (deref->deref_type == nir_deref_type_var) {
+      uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->image,
+                                        &shader->tu5_bindings->num_image,
+                                        TU5_MAX_IMAGE_BINDINGS, set, binding,
+                                        0, false, false);
+      idx = nir_imm_int(b, slot);
+   } else if (nir_src_is_const(deref->arr.index)) {
+      uint32_t arr_idx = MIN2(nir_src_as_uint(deref->arr.index), array_size - 1);
+      uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->image,
+                                        &shader->tu5_bindings->num_image,
+                                        TU5_MAX_IMAGE_BINDINGS, set, binding,
+                                        arr_idx, false, false);
+      idx = nir_imm_int(b, slot);
+   } else {
+      uint32_t base = tu5_alloc_binding_range(shader->tu5_bindings->image,
+                                              &shader->tu5_bindings->num_image,
+                                              TU5_MAX_IMAGE_BINDINGS, set, binding,
+                                              array_size, false, false);
+      idx = nir_iadd_imm(b, deref->arr.index.ssa, base);
+   }
+
+   nir_rewrite_image_intrinsic(instr, idx, nir_image_intrinsic_type_default);
+}
+
 static void
 lower_vulkan_resource_index(struct tu_device *dev, nir_builder *b,
                             nir_intrinsic_instr *instr,
                             struct tu_shader *shader,
                             const struct tu_pipeline_layout *layout)
 {
+   if (dev->physical_device->info->chip == 5) {
+      tu5_lower_vulkan_resource_index(b, instr, shader, layout);
+      return;
+   }
+
    struct ir3_compiler *compiler = dev->compiler;
    nir_def *vulkan_idx = instr->src[0].ssa;
 
@@ -448,6 +639,9 @@ static bool
 lower_ssbo_ubo_intrinsic(struct tu_device *dev,
                          nir_builder *b, nir_intrinsic_instr *intrin)
 {
+   if (dev->physical_device->info->chip == 5)
+      return tu5_lower_ssbo_ubo_intrinsic(dev, b, intrin);
+
    const nir_intrinsic_info *info = &nir_intrinsic_infos[intrin->intrinsic];
 
    /* The bindless base is part of the instruction, which means that part of
@@ -694,6 +888,11 @@ lower_image_deref(struct tu_device *dev, nir_builder *b,
                   nir_intrinsic_instr *instr, struct tu_shader *shader,
                   const struct tu_pipeline_layout *layout)
 {
+   if (dev->physical_device->info->chip == 5) {
+      tu5_lower_image_deref(b, instr, shader, layout);
+      return;
+   }
+
    bool descriptor_valid = true;
    nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
    nir_def *bindless = build_bindless(dev, b, deref, 0, shader, layout, 0, false,
@@ -1135,10 +1334,121 @@ lower_input_attachment(nir_builder *b, nir_tex_instr *tex,
 }
 
 static bool
+tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
+              struct tu_shader *shader, const struct tu_pipeline_layout *layout)
+{
+   tex->can_speculate = true;
+
+   if (nir_tex_instr_src_index(tex, nir_tex_src_texture_deref) >= 0)
+      lower_tex_immutable(dev, shader, layout, b, tex);
+
+   int tex_deref_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+   if (tex_deref_idx >= 0) {
+      nir_deref_instr *deref = nir_src_as_deref(tex->src[tex_deref_idx].src);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      unsigned set = var->data.descriptor_set;
+      unsigned binding = var->data.binding;
+      const struct tu_descriptor_set_layout *set_layout = layout->set[set].layout;
+      const struct tu_descriptor_set_binding_layout *bind_layout =
+         &set_layout->binding[binding];
+      uint32_t array_size = MAX2(bind_layout->array_size, 1);
+      bool is_ia = (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
+                    tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+
+      shader->active_desc_sets |= 1u << set;
+
+      if (deref->deref_type == nir_deref_type_var ||
+          nir_src_is_const(deref->arr.index)) {
+         uint32_t arr_idx = deref->deref_type == nir_deref_type_array
+                               ? MIN2(nir_src_as_uint(deref->arr.index), array_size - 1)
+                               : 0;
+         uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->tex,
+                                           &shader->tu5_bindings->num_tex,
+                                           TU5_MAX_TEX_BINDINGS, set, binding,
+                                           arr_idx, false, is_ia);
+         tex->texture_index = slot;
+      } else {
+         uint32_t base = tu5_alloc_binding_range(shader->tu5_bindings->tex,
+                                                 &shader->tu5_bindings->num_tex,
+                                                 TU5_MAX_TEX_BINDINGS, set, binding,
+                                                 array_size, false, is_ia);
+         tex->texture_index = base;
+         int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+         if (off_idx >= 0)
+            nir_src_rewrite(&tex->src[off_idx].src, deref->arr.index.ssa);
+         else
+            nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, deref->arr.index.ssa);
+      }
+
+      nir_tex_instr_remove_src(tex, nir_tex_instr_src_index(tex, nir_tex_src_texture_deref));
+   }
+
+   int samp_deref_idx = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
+   if (samp_deref_idx >= 0) {
+      nir_deref_instr *deref = nir_src_as_deref(tex->src[samp_deref_idx].src);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      unsigned set = var->data.descriptor_set;
+      unsigned binding = var->data.binding;
+      const struct tu_descriptor_set_layout *set_layout = layout->set[set].layout;
+      const struct tu_descriptor_set_binding_layout *bind_layout =
+         &set_layout->binding[binding];
+      uint32_t array_size = MAX2(bind_layout->array_size, 1);
+      const struct tu_sampler *imm_samplers =
+         tu_immutable_samplers(set_layout, bind_layout);
+
+      shader->active_desc_sets |= 1u << set;
+
+      if (deref->deref_type == nir_deref_type_var ||
+          nir_src_is_const(deref->arr.index)) {
+         uint32_t arr_idx = deref->deref_type == nir_deref_type_array
+                               ? MIN2(nir_src_as_uint(deref->arr.index), array_size - 1)
+                               : 0;
+         uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->samp,
+                                           &shader->tu5_bindings->num_samp,
+                                           TU5_MAX_SAMP_BINDINGS, set, binding,
+                                           arr_idx, false, false);
+         if (imm_samplers && slot < TU5_MAX_SAMP_BINDINGS) {
+            shader->tu5_bindings->samp[slot].has_immutable_sampler = 1;
+            memcpy(shader->tu5_bindings->imm_samp[slot].dword,
+                   imm_samplers[arr_idx].descriptor,
+                   sizeof(shader->tu5_bindings->imm_samp[slot].dword));
+         }
+         tex->sampler_index = slot;
+      } else {
+         uint32_t base = tu5_alloc_binding_range(shader->tu5_bindings->samp,
+                                                 &shader->tu5_bindings->num_samp,
+                                                 TU5_MAX_SAMP_BINDINGS, set, binding,
+                                                 array_size, false, false);
+         if (imm_samplers) {
+            for (uint32_t k = 0; k < array_size && base + k < TU5_MAX_SAMP_BINDINGS; k++) {
+               shader->tu5_bindings->samp[base + k].has_immutable_sampler = 1;
+               memcpy(shader->tu5_bindings->imm_samp[base + k].dword,
+                      imm_samplers[k].descriptor,
+                      sizeof(shader->tu5_bindings->imm_samp[base + k].dword));
+            }
+         }
+         tex->sampler_index = base;
+         int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_sampler_offset);
+         if (off_idx >= 0)
+            nir_src_rewrite(&tex->src[off_idx].src, deref->arr.index.ssa);
+         else
+            nir_tex_instr_add_src(tex, nir_tex_src_sampler_offset, deref->arr.index.ssa);
+      }
+
+      nir_tex_instr_remove_src(tex, nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref));
+   }
+
+   return true;
+}
+
+static bool
 lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
           struct tu_shader *shader, const struct tu_pipeline_layout *layout,
           uint32_t read_only_input_attachments, bool dynamic_renderpass)
 {
+   if (dev->physical_device->info->chip == 5)
+      return tu5_lower_tex(b, tex, dev, shader, layout);
+
    tex->can_speculate = true;
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
@@ -1495,6 +1805,10 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
    }
 
    struct tu_const_state *const_state = &tu_shader->const_state;
+   if (dev->physical_device->info->chip == 5 && !tu_shader->tu5_bindings) {
+      tu_shader->tu5_bindings = static_cast<struct tu5_shader_bindings *>(
+         calloc(1, sizeof(struct tu5_shader_bindings)));
+   }
    const_state->push_consts = (struct tu_push_constant_range) {
       .lo_dwords = 0,
       .dwords = layout->push_constant_size / 4,
@@ -3093,6 +3407,11 @@ tu6_emit_variant(struct tu_cs *cs,
                  uint32_t view_mask,
                  uint64_t binary_iova)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_variant(cs, stage, xs, pvtmem_config, view_mask, binary_iova);
+      return;
+   }
+
    if (stage == MESA_SHADER_COMPUTE) {
       tu6_emit_cs_config<CHIP>(cs, xs, pvtmem_config, binary_iova);
       return;
@@ -3293,6 +3612,7 @@ tu_upload_shader(struct tu_device *dev,
    tu_cs_init_suballoc(&shader->cs, dev, &shader->bo);
 
    uint64_t iova = tu_upload_variant(&shader->cs, v);
+   shader->tu5_binary_iova = iova;
    uint64_t binning_iova = tu_upload_variant(&shader->cs, binning);
    uint64_t safe_const_iova = tu_upload_variant(&shader->cs, safe_const);
    uint64_t safe_const_binning_iova = tu_upload_variant(&shader->cs, safe_const_binning);
@@ -3426,6 +3746,18 @@ tu_shader_cache_process_blob(IO &io, struct tu_shader *shader)
    io.u32(shader->view_mask);
    io.u8(shader->active_desc_sets);
    io.boolean(shader->per_layer_viewport);
+
+   uint8_t has_tu5_bindings;
+   if constexpr (IO::is_write())
+      has_tu5_bindings = shader->tu5_bindings ? 1 : 0;
+   io.u8(has_tu5_bindings);
+   if (has_tu5_bindings) {
+      if constexpr (!IO::is_write()) {
+         shader->tu5_bindings = static_cast<struct tu5_shader_bindings *>(
+            calloc(1, sizeof(struct tu5_shader_bindings)));
+      }
+      io.bytes(shader->tu5_bindings, sizeof(*shader->tu5_bindings));
+   }
 
    io.variant(shader->variant);
 
@@ -3707,6 +4039,19 @@ tu_shader_create(struct tu_device *dev,
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
+   if (dev->physical_device->info->chip == 5 && shader->tu5_bindings) {
+      nir->info.num_ubos = shader->tu5_bindings->num_ubo;
+      nir->info.num_ssbos = shader->tu5_bindings->num_ssbo;
+      nir->info.num_images = shader->tu5_bindings->num_image;
+      nir->info.num_textures = shader->tu5_bindings->num_tex;
+      BITSET_ZERO(nir->info.textures_used);
+      if (shader->tu5_bindings->num_tex > 0)
+         BITSET_SET_RANGE(nir->info.textures_used, 0, shader->tu5_bindings->num_tex - 1);
+      BITSET_ZERO(nir->info.samplers_used);
+      if (shader->tu5_bindings->num_samp > 0)
+         BITSET_SET_RANGE(nir->info.samplers_used, 0, shader->tu5_bindings->num_samp - 1);
+   }
+
    struct ir3_shader_nir_options nir_options;
    init_ir3_nir_options(&nir_options, key);
 
@@ -3715,7 +4060,8 @@ tu_shader_create(struct tu_device *dev,
    /* This has to happen after finalizing, so that we know the final bitsize
     * after vectorizing.
     */
-   NIR_PASS(_, nir, tu_nir_lower_ssbo_descriptor, dev);
+   if (dev->physical_device->info->chip >= 6)
+      NIR_PASS(_, nir, tu_nir_lower_ssbo_descriptor, dev);
 
    if (dev->physical_device->compiler_options.enable_ssbo_emulation) {
       nir_lower_ssbo_options options = {
@@ -4266,5 +4612,6 @@ tu_shader_destroy(struct tu_device *dev,
    if (shader->safe_const_variant)
       ralloc_free(const_cast<struct ir3_shader_variant *>(shader->safe_const_variant));
 
+   free(shader->tu5_bindings);
    vk_free(&dev->vk.alloc, shader);
 }

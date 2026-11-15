@@ -1951,7 +1951,7 @@ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
    uint32_t ubwc_version;
    if (get_kgsl_prop(fd, KGSL_PROP_UBWC_MODE, &ubwc_version,
                      sizeof(ubwc_version)))
-      goto fail;
+      ubwc_version = 0;
 
    if (get_kgsl_prop(fd, KGSL_PROP_UCHE_TRAP_BASE, &device->uche_trap_base,
                      sizeof(device->uche_trap_base))) {
@@ -2001,8 +2001,12 @@ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
    device->has_sparse = kgsl_is_virtual_bo_supported(fd);
    device->has_sparse_prr = device->has_sparse;
    device->has_lazy_bos = device->has_sparse;
-   get_kgsl_prop(fd, KGSL_PROP_GPU_VA64_SIZE, &device->va_size,
-                 sizeof(device->va_size));
+   if (get_kgsl_prop(fd, KGSL_PROP_GPU_VA64_SIZE, &device->va_size,
+                     sizeof(device->va_size))) {
+      uint32_t bitness = 48;
+      get_kgsl_prop(fd, KGSL_PROP_DEVICE_BITNESS, &bitness, sizeof(bitness));
+      device->va_size = (bitness >= 48) ? (1ULL << 47) : (1ULL << 32);
+   }
    /* We don't actually use the VMA, but set a fake offset so that it doesn't
     * think we're trying to allocate 0 and assert.
     */
@@ -2022,6 +2026,10 @@ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
     * have to follow here. Yuck.
     */
    switch (ubwc_version) {
+   case 0:
+      device->ubwc_config.bank_swizzle_levels = 0;
+      device->ubwc_config.macrotile_mode = FDL_MACROTILE_4_CHANNEL;
+      break;
    case KGSL_UBWC_1_0:
       device->ubwc_config.bank_swizzle_levels = 0x7;
       device->ubwc_config.macrotile_mode = FDL_MACROTILE_4_CHANNEL;

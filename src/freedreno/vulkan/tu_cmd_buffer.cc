@@ -170,7 +170,7 @@ tu_emit_raw_event_write(struct tu_cmd_buffer *cmd,
                         enum vgt_event_type event,
                         bool needs_seqno)
 {
-   if (CHIP == A6XX) {
+   if (CHIP <= A6XX) {
       tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, needs_seqno ? 4 : 1);
       tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(event));
    } else {
@@ -195,6 +195,17 @@ tu_emit_event_write(struct tu_cmd_buffer *cmd,
                     struct tu_cs *cs,
                     enum fd_gpu_event event)
 {
+   if (CHIP == A5XX) {
+      if (event == FD_CACHE_INVALIDATE) {
+         tu5_emit_cache_invalidate(cs);
+         return;
+      }
+      if (event == FD_LRZ_FLUSH) {
+         tu5_emit_lrz_flush(cs);
+         return;
+      }
+   }
+
    struct fd_gpu_event_info event_info = fd_gpu_events<CHIP>[event];
    assert(event_info.raw_event);
    tu_emit_raw_event_write<CHIP>(cmd, cs, event_info.raw_event,
@@ -318,6 +329,25 @@ template <chip CHIP>
 static void
 tu_set_render_mode(struct tu_cs *cs, tu_set_render_mode args)
 {
+   if (CHIP == A5XX) {
+      switch (args.mode) {
+      case RM6_DIRECT_RENDER:
+      case RM6_BIN_RENDER_END:
+      case RM6_COMPUTE:
+         tu5_set_render_mode(cs, BYPASS);
+         break;
+      case RM6_BIN_VISIBILITY:
+         tu5_set_render_mode(cs, BINNING);
+         break;
+      case RM6_BIN_RENDER_START:
+         tu5_set_render_mode(cs, GMEM);
+         break;
+      default:
+         break;
+      }
+      return;
+   }
+
    tu_cs_emit_pkt7(cs, CP_SET_MARKER, 1);
    if (CHIP >= A8XX) {
       tu_cs_emit(cs, A8XX_CP_SET_MARKER_0_MODE(args.mode) |
@@ -390,7 +420,7 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_CLEAN);
    if (flushes & TU_CMD_FLAG_CACHE_INVALIDATE)
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
-   if (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE) {
+   if (CHIP >= A6XX && (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE)) {
       if (CHIP < A8XX) {
          tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
                .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
@@ -441,23 +471,35 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    if (flushes & TU_CMD_FLAG_WAIT_MEM_WRITES)
       tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
    if (emit_subpass_slice_fence) {
-      /* Emit the stronger flushes in sysmem mode. We need this from
-       * experimentation.
-       */
-      tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
-                             CP_COND_REG_EXEC_0_SYSMEM);
-      if (emit_cache_invalidate_gmem)
-         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
-      if (emit_subpass_slice_wait)
-         tu_cs_emit_wfi(cs);
-      tu_cond_exec_end(cs);
-
-      if (CHIP >= A8XX) {
-         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_LABEL);
-         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_SUBPASS_SLICE_FENCE);
-         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_LABEL);
+      if (CHIP == A5XX) {
+         if (emit_cache_invalidate_gmem)
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
+         if (emit_subpass_slice_wait)
+            tu_cs_emit_wfi(cs);
+      } else if constexpr (CHIP == A5XX) {
+         if (emit_cache_invalidate_gmem)
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
+         if (emit_subpass_slice_wait)
+            tu_cs_emit_wfi(cs);
       } else {
-         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_SUBPASS_FENCE);
+         /* Emit the stronger flushes in sysmem mode. We need this from
+          * experimentation.
+          */
+         tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
+                                CP_COND_REG_EXEC_0_SYSMEM);
+         if (emit_cache_invalidate_gmem)
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
+         if (emit_subpass_slice_wait)
+            tu_cs_emit_wfi(cs);
+         tu_cond_exec_end(cs);
+
+         if (CHIP >= A8XX) {
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_LABEL);
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_SUBPASS_SLICE_FENCE);
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_LABEL);
+         } else {
+            tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_SUBPASS_FENCE);
+         }
       }
    }
    if (flushes & TU_CMD_FLAG_WAIT_FOR_IDLE)
@@ -673,6 +715,11 @@ template <chip CHIP>
 static void
 emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
 {
+   if (CHIP == A5XX) {
+      tu5_emit_rb_ccu_cntl(cs, dev->physical_device, gmem);
+      return;
+   }
+
    /* The CCUs are a cache that allocates memory from GMEM while facilitating
     * framebuffer caching for sysmem rendering. The CCU is split into two parts,
     * one for color and one for depth. The size and offset of these in GMEM can
@@ -776,11 +823,11 @@ tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
       cmd_buffer->state.cache.flush_bits |=
          TU_CMD_FLAG_CCU_INVALIDATE_COLOR |
          TU_CMD_FLAG_CCU_INVALIDATE_DEPTH |
-         (CHIP == A6XX ? TU_CMD_FLAG_WAIT_FOR_IDLE : 0);
+         (CHIP <= A6XX ? TU_CMD_FLAG_WAIT_FOR_IDLE : 0);
       cmd_buffer->state.cache.pending_flush_bits &= ~(
          TU_CMD_FLAG_CCU_INVALIDATE_COLOR |
          TU_CMD_FLAG_CCU_INVALIDATE_DEPTH |
-         (CHIP == A6XX ? TU_CMD_FLAG_WAIT_FOR_IDLE : 0));
+         (CHIP <= A6XX ? TU_CMD_FLAG_WAIT_FOR_IDLE : 0));
    }
 
    tu_emit_cache_flush<CHIP>(cmd_buffer);
@@ -807,6 +854,11 @@ tu6_emit_zs(struct tu_cmd_buffer *cmd,
             const struct tu_subpass *subpass,
             struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_zs(cmd, subpass, cs);
+      return;
+   }
+
    const uint32_t a = subpass->depth_stencil_attachment.attachment;
    if (a == VK_ATTACHMENT_UNUSED) {
       tu_cs_emit_regs(cs,
@@ -881,6 +933,11 @@ tu6_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
              struct tu_cs *cs)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_mrt(cmd, subpass, cs);
+      return;
+   }
+
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
 
    enum a6xx_format mrt0_format = FMT6_NONE;
@@ -988,6 +1045,13 @@ tu6_emit_bin_size(struct tu_cs *cs,
                   uint32_t bin_h,
                   struct tu_bin_size_params &&p)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_bin_size(cs, bin_w, bin_h,
+                        p.buffers_location == BUFFERS_IN_SYSMEM ||
+                           (bin_w == 0 && bin_h == 0));
+      return;
+   }
+
    tu_cs_emit_regs(
       cs, GRAS_SC_BIN_CNTL(CHIP, .binw = bin_w,
                                  .binh = bin_h,
@@ -1042,6 +1106,16 @@ tu6_emit_render_cntl(struct tu_cmd_buffer *cmd,
                      const struct tu_subpass *subpass,
                      struct tu_cs *cs,
                      bool binning);
+
+template <>
+void
+tu6_emit_render_cntl<A5XX>(struct tu_cmd_buffer *cmd,
+                           const struct tu_subpass *subpass,
+                           struct tu_cs *cs,
+                           bool binning)
+{
+   tu5_emit_render_cntl(cmd, subpass, cs, binning);
+}
 
 template <>
 void
@@ -1165,6 +1239,11 @@ tu6_emit_window_scissor(struct tu_cs *cs,
                         uint32_t x2,
                         uint32_t y2)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_window_scissor(cs, x1, y1, x2, y2);
+      return;
+   }
+
    tu_cs_emit_regs(cs,
                    GRAS_SC_WINDOW_SCISSOR_TL(CHIP, .x = x1, .y = y1),
                    GRAS_SC_WINDOW_SCISSOR_BR(CHIP, .x = x2, .y = y2));
@@ -1179,6 +1258,11 @@ template <chip CHIP>
 void
 tu6_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_window_offset(cs, x1, y1);
+      return;
+   }
+
    tu_crb crb = cs->crb(5);
 
    crb.add(A6XX_RB_WINDOW_OFFSET(.x = x1, .y = y1));
@@ -1292,7 +1376,19 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
     * GPU, because their underlying memory may change between setting the draw
     * state.
     */
+   if (cs->device->physical_device->info->chip == 5) {
+      enable_mask = 0;
+      if (id == TU_DRAW_STATE_VS_BINNING ||
+          id == TU_DRAW_STATE_GS_BINNING ||
+          id == TU_DRAW_STATE_INPUT_ATTACHMENTS_GMEM ||
+          id == TU_DRAW_STATE_PRIM_MODE_GMEM ||
+          !state.size || !state.iova)
+         enable_mask |= CP_SET_DRAW_STATE__0_DISABLE;
+   }
+
    if (id == TU_DRAW_STATE_DESC_SETS_LOAD ||
+       (cs->device->physical_device->info->chip == 5 &&
+        (id == TU_DRAW_STATE_CONST || id == TU_DRAW_STATE_DESC_SETS)) ||
        id == TU_DRAW_STATE_VS ||
        id == TU_DRAW_STATE_VS_BINNING ||
        id == TU_DRAW_STATE_HS ||
@@ -1315,6 +1411,11 @@ void
 tu6_emit_msaa(struct tu_cs *cs, VkSampleCountFlagBits vk_samples,
               bool msaa_disable)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_msaa(cs, vk_samples, msaa_disable);
+      return;
+   }
+
    const enum a3xx_msaa_samples samples = tu_msaa_samples(vk_samples);
    msaa_disable |= (samples == MSAA_ONE);
 
@@ -1422,6 +1523,11 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
 {
    if (TU_DEBUG(SYSMEM)) {
       cmd->state.rp.force_render_mode_reason = "TU_DEBUG(SYSMEM)";
+      return true;
+   }
+
+   if (cmd->device->physical_device->info->chip == 5) {
+      cmd->state.rp.force_render_mode_reason = "A5XX sysmem only";
       return true;
    }
 
@@ -2465,6 +2571,11 @@ template <chip CHIP>
 static void
 tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
+   if (CHIP == A5XX) {
+      tu5_init_hw(cmd, cs);
+      return;
+   }
+
    struct tu_device *dev = cmd->device;
    const struct tu_physical_device *phys_dev = dev->physical_device;
 
@@ -3085,11 +3196,13 @@ tu_trace_end_render_pass(struct tu_cmd_buffer *cmd, bool gmem,
       MAX2(cmd->state.rp.drawcall_count, 1);
 
    struct u_trace_address addr = {};
-   if (cmd->state.lrz.image_view) {
-      struct tu_image *image = cmd->state.lrz.image_view->image;
-      addr.offset = image->iova +
-                    image->lrz_layout.lrz_fc_offset +
-                    offsetof(fd_lrzfc_layout<CHIP>, buffer[0].dir_track);
+   if constexpr (CHIP >= A6XX) {
+      if (cmd->state.lrz.image_view) {
+         struct tu_image *image = cmd->state.lrz.image_view->image;
+         addr.offset = image->iova +
+                       image->lrz_layout.lrz_fc_offset +
+                       offsetof(fd_lrzfc_layout<CHIP>, buffer[0].dir_track);
+      }
    }
 
    int32_t lrz_disabled_at_draw = cmd->state.rp.lrz_disable_reason
@@ -3344,7 +3457,7 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 {
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
 
-   if (CHIP == A6XX) {
+   if (CHIP <= A6XX) {
       tu_lrz_sysmem_begin<CHIP>(cmd, cs);
    } else {
       if (tu7_emit_concurrent_binning_start(cmd, cs, false)) {
@@ -3384,8 +3497,10 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    tu_cs_emit_pkt7(cs, CP_SET_VISIBILITY_OVERRIDE, 1);
    tu_cs_emit(cs, 0x1);
 
-   tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
-   tu_cs_emit(cs, 0x0);
+   if constexpr (CHIP >= A6XX) {
+      tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
+      tu_cs_emit(cs, 0x0);
+   }
 
    /* Reset bin scaling. */
    if (cmd->device->physical_device->info->props.has_hw_bin_scaling) {
@@ -4690,10 +4805,6 @@ tu_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
                                         pStrides);
    }
 
-   cmd->state.vertex_buffers.size = 4 * cmd->state.max_vbs_bound;
-   cmd->state.vertex_buffers.iova =
-      tu_cs_draw_state(&cmd->sub_cs, &cs, cmd->state.vertex_buffers.size).iova;
-
    for (uint32_t i = 0; i < bindingCount; i++) {
       if (pBuffers[i] == VK_NULL_HANDLE) {
          cmd->state.vb[firstBinding + i].base = 0;
@@ -4706,10 +4817,16 @@ tu_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
       }
    }
 
-   for (uint32_t i = 0; i < cmd->state.max_vbs_bound; i++) {
-      tu_cs_emit_regs(&cs,
-                      A6XX_VFD_VERTEX_BUFFER_BASE(i, .qword = cmd->state.vb[i].base),
-                      A6XX_VFD_VERTEX_BUFFER_SIZE(i, cmd->state.vb[i].size));
+   if (cmd->device->physical_device->info->chip != 5) {
+      cmd->state.vertex_buffers.size = 4 * cmd->state.max_vbs_bound;
+      cmd->state.vertex_buffers.iova =
+         tu_cs_draw_state(&cmd->sub_cs, &cs, cmd->state.vertex_buffers.size).iova;
+
+      for (uint32_t i = 0; i < cmd->state.max_vbs_bound; i++) {
+         tu_cs_emit_regs(&cs,
+                         A6XX_VFD_VERTEX_BUFFER_BASE(i, .qword = cmd->state.vb[i].base),
+                         A6XX_VFD_VERTEX_BUFFER_SIZE(i, cmd->state.vb[i].size));
+      }
    }
 
    cmd->state.dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
@@ -4773,6 +4890,11 @@ static void
 tu6_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
                          VkPipelineBindPoint bind_point)
 {
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_descriptor_sets(cmd, bind_point);
+      return;
+   }
+
    struct tu_descriptor_state *descriptors_state =
       tu_get_descriptors_state(cmd, bind_point);
    uint32_t sp_bindless_base_reg, hlsq_bindless_base_reg;
@@ -4894,7 +5016,8 @@ tu_bind_descriptor_sets(struct tu_cmd_buffer *cmd,
       descriptors_state->set_iova[idx] = set ?
          (set->va | BINDLESS_DESCRIPTOR_64B) : 0;
 
-      if (cmd->device->physical_device->compiler_options.enable_ssbo_emulation)
+      if (CHIP == A5XX ||
+          cmd->device->physical_device->compiler_options.enable_ssbo_emulation)
          cmd->state.dirty |= TU_CMD_DIRTY_SHADER_CONSTS;
 
       if (!set)
@@ -4931,6 +5054,18 @@ tu_bind_descriptor_sets(struct tu_cmd_buffer *cmd,
                   for (unsigned i = 0;
                        i < binding->size / (4 * FDL6_TEX_CONST_DWORDS);
                        i++, dst_desc += FDL6_TEX_CONST_DWORDS) {
+                     if constexpr (CHIP == A5XX) {
+                        uint64_t va =
+                           dst_desc[12] |
+                           (static_cast<uint64_t>(dst_desc[13] & 0x1ffffu) << 32);
+                        va += offset;
+                        dst_desc[12] = static_cast<uint32_t>(va);
+                        dst_desc[13] = static_cast<uint32_t>(va >> 32) & 0x1ffffu;
+                        dst_desc[4] = dst_desc[12];
+                        dst_desc[5] = (dst_desc[5] & ~0x1ffffu) | dst_desc[13];
+                        continue;
+                     }
+
                      uint64_t va = tu_desc_get_buffer_addr<CHIP>(dst_desc);
                      if (CHIP >= A8XX) {
                         /* gen8 buffer descriptors take a byte address, and
@@ -5290,13 +5425,15 @@ tu_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
    struct tu_cs *cs = &cmd->draw_cs;
 
-   /* using COND_REG_EXEC for xfb commands matches the blob behavior
-    * presumably there isn't any benefit using a draw state when the
-    * condition is (SYSMEM | BINNING)
-    */
-   tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
-                          CP_COND_REG_EXEC_0_SYSMEM |
-                          CP_COND_REG_EXEC_0_BINNING);
+   if constexpr (CHIP != A5XX) {
+      /* using COND_REG_EXEC for xfb commands matches the blob behavior
+       * presumably there isn't any benefit using a draw state when the
+       * condition is (SYSMEM | BINNING)
+       */
+      tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
+                             CP_COND_REG_EXEC_0_SYSMEM |
+                             CP_COND_REG_EXEC_0_BINNING);
+   }
 
    for (uint32_t i = 0; i < bindingCount; i++) {
       VK_FROM_HANDLE(tu_buffer, buf, pBuffers[i]);
@@ -5315,7 +5452,9 @@ tu_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
       cmd->state.streamout_offset[idx] = offset;
    }
 
-   tu_cond_exec_end(cs);
+   if constexpr (CHIP != A5XX) {
+      tu_cond_exec_end(cs);
+   }
 }
 TU_GENX(tu_CmdBindTransformFeedbackBuffersEXT);
 
@@ -5330,9 +5469,11 @@ tu_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
    struct tu_cs *cs = &cmd->draw_cs;
 
-   tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
-                          CP_COND_REG_EXEC_0_SYSMEM |
-                          CP_COND_REG_EXEC_0_BINNING);
+   if constexpr (CHIP != A5XX) {
+      tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
+                             CP_COND_REG_EXEC_0_SYSMEM |
+                             CP_COND_REG_EXEC_0_BINNING);
+   }
 
    tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, false));
 
@@ -5363,7 +5504,9 @@ tu_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
       }
    }
 
-   tu_cond_exec_end(cs);
+   if constexpr (CHIP != A5XX) {
+      tu_cond_exec_end(cs);
+   }
 }
 TU_GENX(tu_CmdBeginTransformFeedbackEXT);
 
@@ -5378,9 +5521,11 @@ tu_CmdEndTransformFeedbackEXT(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
    struct tu_cs *cs = &cmd->draw_cs;
 
-   tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
-                          CP_COND_REG_EXEC_0_SYSMEM |
-                          CP_COND_REG_EXEC_0_BINNING);
+   if constexpr (CHIP != A5XX) {
+      tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(RENDER_MODE) |
+                             CP_COND_REG_EXEC_0_SYSMEM |
+                             CP_COND_REG_EXEC_0_BINNING);
+   }
 
    tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, true));
 
@@ -5417,7 +5562,9 @@ tu_CmdEndTransformFeedbackEXT(VkCommandBuffer commandBuffer,
                      tu_scratch_reg<CHIP>(0));
    }
 
-   tu_cond_exec_end(cs);
+   if constexpr (CHIP != A5XX) {
+      tu_cond_exec_end(cs);
+   }
 
    cmd->state.rp.xfb_used = true;
 }
@@ -5622,6 +5769,8 @@ tu_CmdBindPipeline(VkCommandBuffer commandBuffer,
       tu_cs_emit_state_ib(&cmd->cs,
                           pipeline->shaders[MESA_SHADER_COMPUTE]->state);
       cmd->state.compute_load_state = pipeline->load_state;
+      if (cmd->device->physical_device->info->chip == 5)
+         cmd->state.dirty |= TU_CMD_DIRTY_COMPUTE_DESC_SETS;
       return;
    }
 
@@ -6786,8 +6935,8 @@ tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd, struct tu_resolve_group *r
    const struct tu_vsc_config *vsc = tu_vsc_config(cmd, cmd->state.tiling);
    bool per_layer_render_area = cmd->state.per_layer_render_area;
 
-   /* Shader resolve subpasses don't use GMEM */
-   if (subpass->custom_resolve)
+   /* Shader resolve subpasses don't use GMEM; A5XX always renders in sysmem */
+   if (CHIP == A5XX || subpass->custom_resolve)
       return;
 
    /* If we might choose to bin, then put the loads under a check for geometry
@@ -6893,8 +7042,9 @@ tu_emit_subpass_begin_sysmem(struct tu_cmd_buffer *cmd)
    struct tu_cs *cs = &cmd->draw_cs;
    const struct tu_subpass *subpass = cmd->state.subpass;
    uint32_t subpass_idx = subpass - cmd->state.pass->subpasses;
+   bool emit_cond_exec = CHIP != A5XX && !subpass->custom_resolve;
 
-   if (!subpass->custom_resolve)
+   if (emit_cond_exec)
       tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
 
    tu6_emit_sysmem_unresolves<CHIP>(cmd, cs, cmd->state.subpass);
@@ -6905,7 +7055,7 @@ tu_emit_subpass_begin_sysmem(struct tu_cmd_buffer *cmd)
          tu_clear_sysmem_attachment<CHIP>(cmd, cs, i);
    }
 
-   if (!subpass->custom_resolve)
+   if (emit_cond_exec)
       tu_cond_exec_end(cs); /* sysmem */
 }
 
@@ -7018,7 +7168,7 @@ tu_emit_subpass_custom_resolve(struct tu_cmd_buffer *cmd)
        */
       tu_cs_emit_regs(cs, GRAS_BIN_FOVEAT(CHIP));
       tu_cs_emit_regs(cs, RB_BIN_FOVEAT(CHIP));
-   } else {
+   } else if (CHIP == A6XX) {
       tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
 
       /* On a6xx the location is set in *_BIN_CONTROL */
@@ -7651,7 +7801,8 @@ tu_emit_subpass_stores(struct tu_cmd_buffer *cmd,
 {
    struct tu_cs *cs = &cmd->draw_cs;
 
-   if (cmd->state.tiling->possible) {
+   bool gmem_possible = CHIP != A5XX && cmd->state.tiling->possible;
+   if (gmem_possible) {
       if (cmd->state.pass->has_fdm)
          tu_cs_set_writeable(cs, true);
 
@@ -7673,7 +7824,7 @@ tu_emit_subpass_stores(struct tu_cmd_buffer *cmd,
 
    tu6_emit_sysmem_resolves<CHIP>(cmd, cs, subpass);
 
-   if (cmd->state.tiling->possible)
+   if (gmem_possible)
       tu_cond_exec_end(cs);
 }
 
@@ -8058,6 +8209,9 @@ template <chip CHIP>
 static struct tu_draw_state
 tu_emit_consts(struct tu_cmd_buffer *cmd, bool compute)
 {
+   if constexpr (CHIP == A5XX)
+      return tu5_emit_consts(cmd, compute);
+
    uint32_t dwords = 0;
    const struct tu_push_constant_range *shared_consts =
       compute ? &cmd->state.shaders[MESA_SHADER_COMPUTE]->const_state.push_consts :
@@ -8515,14 +8669,25 @@ tu6_emit_fs_params(struct tu_cmd_buffer *cmd)
       return;
    }
 
-   tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_FRAG, 3 + 4 * num_units);
-   tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-         CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-         CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-         CP_LOAD_STATE6_0_STATE_BLOCK(SB6_FS_SHADER) |
-         CP_LOAD_STATE6_0_NUM_UNIT(num_units));
-   tu_cs_emit(&cs, 0);
-   tu_cs_emit(&cs, 0);
+   if (cmd->device->physical_device->info->chip == 5) {
+      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE4, 3 + 4 * num_units);
+      tu_cs_emit(&cs, CP_LOAD_STATE4_0_DST_OFF(offset) |
+            CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+            CP_LOAD_STATE4_0_STATE_BLOCK(SB4_FS_SHADER) |
+            CP_LOAD_STATE4_0_NUM_UNIT(num_units));
+      tu_cs_emit(&cs, CP_LOAD_STATE4_1_EXT_SRC_ADDR(0) |
+            CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS));
+      tu_cs_emit(&cs, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
+   } else {
+      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_FRAG, 3 + 4 * num_units);
+      tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+            CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+            CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+            CP_LOAD_STATE6_0_STATE_BLOCK(SB6_FS_SHADER) |
+            CP_LOAD_STATE6_0_NUM_UNIT(num_units));
+      tu_cs_emit(&cs, 0);
+      tu_cs_emit(&cs, 0);
+   }
 
    tu_emit_fdm_params(cmd, &cs, fs, num_units);
 
@@ -8680,6 +8845,7 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
                   MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) ||
       BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                   MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX) ||
+      (CHIP == A5XX && (cmd->state.dirty & TU_CMD_DIRTY_PROGRAM)) ||
       (cmd->state.dirty & TU_CMD_DIRTY_DRAW_STATE)) {
       bool primitive_restart_enabled =
          cmd->vk.dynamic_graphics_state.ia.primitive_restart_enable;
@@ -8689,21 +8855,41 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
          cmd->vk.dynamic_graphics_state.rs.provoking_vertex ==
          VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
 
-      uint32_t primitive_cntl_0 =
-         PC_CNTL(CHIP, .primitive_restart = primitive_restart,
-                 .provoking_vtx_last = provoking_vtx_last)
-            .value;
-      tu_cs_emit_regs(cs, PC_CNTL(CHIP, .dword = primitive_cntl_0));
-      if (CHIP >= A7XX) {
-         tu_cs_emit_regs(cs, VPC_PC_CNTL(CHIP, .dword = primitive_cntl_0));
+      if constexpr (CHIP == A5XX) {
+         tu5_emit_pc_cntl(cmd, cs, primitive_restart, provoking_vtx_last);
+      } else {
+         uint32_t primitive_cntl_0 =
+            PC_CNTL(CHIP, .primitive_restart = primitive_restart,
+                    .provoking_vtx_last = provoking_vtx_last)
+               .value;
+         tu_cs_emit_regs(cs, PC_CNTL(CHIP, .dword = primitive_cntl_0));
+         if (CHIP >= A7XX) {
+            tu_cs_emit_regs(cs, VPC_PC_CNTL(CHIP, .dword = primitive_cntl_0));
+         }
       }
    }
 
    if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                    MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_INDEX) ||
        (cmd->state.dirty & TU_CMD_DIRTY_DRAW_STATE)) {
-      tu_cs_emit_regs(cs, PC_RESTART_INDEX(CHIP,
-         cmd->vk.dynamic_graphics_state.ia.primitive_restart_index));
+      if constexpr (CHIP == A5XX) {
+         tu5_emit_restart_index(
+            cs, cmd->vk.dynamic_graphics_state.ia.primitive_restart_index);
+      } else {
+         tu_cs_emit_regs(cs, PC_RESTART_INDEX(CHIP,
+            cmd->vk.dynamic_graphics_state.ia.primitive_restart_index));
+      }
+   }
+
+   if constexpr (CHIP == A5XX) {
+      if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                      MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ||
+          BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                      MESA_VK_DYNAMIC_RS_RASTERIZER_DISCARD_ENABLE) ||
+          (cmd->state.dirty & (TU_CMD_DIRTY_FS | TU_CMD_DIRTY_SUBPASS |
+                               TU_CMD_DIRTY_DRAW_STATE))) {
+         tu5_emit_fs_output_cntl(cmd, cs);
+      }
    }
 
    if (cmd->device->physical_device->info->props.has_rt_workaround &&
@@ -8717,10 +8903,11 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       return VK_SUCCESS;
 
    struct tu_tess_params *tess_params = &cmd->state.tess_params;
-   if ((dirty & TU_CMD_DIRTY_TESS_PARAMS) ||
-       BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
-                   MESA_VK_DYNAMIC_TS_DOMAIN_ORIGIN) ||
-       (dirty & TU_CMD_DIRTY_DRAW_STATE)) {
+   if (CHIP >= A6XX &&
+       ((dirty & TU_CMD_DIRTY_TESS_PARAMS) ||
+        BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                    MESA_VK_DYNAMIC_TS_DOMAIN_ORIGIN) ||
+        (dirty & TU_CMD_DIRTY_DRAW_STATE))) {
       bool tess_upper_left_domain_origin =
          static_cast<VkTessellationDomainOrigin>(cmd->vk.dynamic_graphics_state.ts.domain_origin) ==
          VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT;
@@ -8780,16 +8967,23 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
                   MESA_VK_DYNAMIC_ATTACHMENT_FEEDBACK_LOOP_ENABLE);
 
    if (dirty_lrz) {
-      struct tu_cs cs;
-      uint32_t size = 8 +
-                      (cmd->device->physical_device->info->props.lrz_track_quirk ? 2 : 0) +
-                      (CHIP >= A7XX ? 2 : 0); // A7XX has extra packets from LRZ_CNTL2.
+      if constexpr (CHIP == A5XX) {
+         struct tu_cs cs;
+         cmd->state.lrz_and_depth_plane_state =
+            tu_cs_draw_state(&cmd->sub_cs, &cs, 6);
+         tu5_emit_depth_plane(cmd, &cs);
+      } else {
+         struct tu_cs cs;
+         uint32_t size = 8 +
+                         (cmd->device->physical_device->info->props.lrz_track_quirk ? 2 : 0) +
+                         (CHIP >= A7XX ? 2 : 0); // A7XX has extra packets from LRZ_CNTL2.
 
-      cmd->state.lrz_and_depth_plane_state =
-         tu_cs_draw_state(&cmd->sub_cs, &cs, size);
-      tu6_update_simplified_stencil_state(cmd);
-      tu6_emit_lrz<CHIP>(cmd, &cs);
-      tu6_build_depth_plane_z_mode<CHIP>(cmd, &cs);
+         cmd->state.lrz_and_depth_plane_state =
+            tu_cs_draw_state(&cmd->sub_cs, &cs, size);
+         tu6_update_simplified_stencil_state(cmd);
+         tu6_emit_lrz<CHIP>(cmd, &cs);
+         tu6_build_depth_plane_z_mode<CHIP>(cmd, &cs);
+      }
    }
 
    if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
@@ -8836,6 +9030,18 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
        (cmd->state.dirty & (TU_CMD_DIRTY_PROGRAM | TU_CMD_DIRTY_FDM))) {
       tu_emit_fs_params(cmd);
       dirty_fs_params = true;
+   }
+
+   if constexpr (CHIP == A5XX) {
+      if ((dirty & (TU_CMD_DIRTY_VERTEX_BUFFERS | TU_CMD_DIRTY_VS |
+                    TU_CMD_DIRTY_DRAW_STATE)) ||
+          BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                      MESA_VK_DYNAMIC_VI) ||
+          BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+                      MESA_VK_DYNAMIC_VI_BINDING_STRIDES)) {
+         tu5_emit_vertex_buffers(cmd);
+         dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
+      }
    }
 
    /* for the first draw in a renderpass, re-emit all the draw states
@@ -8935,7 +9141,9 @@ tu_draw_initiator(struct tu_cmd_buffer *cmd, enum pc_di_src_sel src_sel)
       CP_DRAW_INDX_OFFSET_0_PRIM_TYPE(primtype) |
       CP_DRAW_INDX_OFFSET_0_SOURCE_SELECT(src_sel) |
       CP_DRAW_INDX_OFFSET_0_INDEX_SIZE(static_cast<enum a4xx_index_size>(cmd->state.index_size)) |
-      CP_DRAW_INDX_OFFSET_0_VIS_CULL(USE_VISIBILITY);
+      CP_DRAW_INDX_OFFSET_0_VIS_CULL(
+         cmd->device->physical_device->info->chip == 5 ? IGNORE_VISIBILITY
+                                                       : USE_VISIBILITY);
 
    if (cmd->state.shaders[MESA_SHADER_GEOMETRY]->variant)
       initiator |= CP_DRAW_INDX_OFFSET_0_GS_ENABLE;
@@ -9057,10 +9265,16 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
       return;
    }
 
+   bool is_a5xx = cmd->device->physical_device->info->chip == 5;
+
    if (!skip_vfd) {
-      tu_cs_emit_regs(&cs,
-                      A6XX_VFD_INDEX_OFFSET(vertex_offset),
-                      A6XX_VFD_INSTANCE_START_OFFSET(first_instance));
+      if (is_a5xx) {
+         tu5_emit_vfd_index_offset(&cs, vertex_offset, first_instance);
+      } else {
+         tu_cs_emit_regs(&cs,
+                         A6XX_VFD_INDEX_OFFSET(vertex_offset),
+                         A6XX_VFD_INSTANCE_START_OFFSET(first_instance));
+      }
    }
 
    /* It is implemented as INDIRECT load even on a750+ because with UBO
@@ -9069,13 +9283,23 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
     * TODO/A7XX: Rework vs params to use UBO lowering.
     */
    if (offset) {
-      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3);
-      tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-            CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-            CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
-            CP_LOAD_STATE6_0_STATE_BLOCK(SB6_VS_SHADER) |
-            CP_LOAD_STATE6_0_NUM_UNIT(num_vec4));
-      tu_cs_emit_qw(&cs, consts_iova);
+      if (is_a5xx) {
+         tu_cs_emit_pkt7(&cs, CP_LOAD_STATE4, 3);
+         tu_cs_emit(&cs, CP_LOAD_STATE4_0_DST_OFF(offset) |
+               CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
+               CP_LOAD_STATE4_0_STATE_BLOCK(SB4_VS_SHADER) |
+               CP_LOAD_STATE4_0_NUM_UNIT(num_vec4));
+         tu_cs_emit_qw(&cs, consts_iova |
+               static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
+      } else {
+         tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3);
+         tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+               CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+               CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+               CP_LOAD_STATE6_0_STATE_BLOCK(SB6_VS_SHADER) |
+               CP_LOAD_STATE6_0_NUM_UNIT(num_vec4));
+         tu_cs_emit_qw(&cs, consts_iova);
+      }
    }
 
    cmd->state.last_vs_params.vertex_offset = vertex_offset;
@@ -9316,13 +9540,21 @@ tu_CmdDrawIndirect(VkCommandBuffer commandBuffer,
 
    tu6_draw_common<CHIP>(cmd, cs, false, 0);
 
-   tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 6);
-   tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
-   tu_cs_emit(cs, A6XX_CP_DRAW_INDIRECT_MULTI_1_OPCODE(INDIRECT_OP_NORMAL) |
-                  A6XX_CP_DRAW_INDIRECT_MULTI_1_DST_OFF(vs_params_offset(cmd)));
-   tu_cs_emit(cs, drawCount);
-   tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset));
-   tu_cs_emit(cs, stride);
+   if constexpr (CHIP == A5XX) {
+      for (uint32_t i = 0; i < drawCount; i++) {
+         tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT, 3);
+         tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
+         tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset + static_cast<uint64_t>(i) * stride));
+      }
+   } else {
+      tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 6);
+      tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
+      tu_cs_emit(cs, A6XX_CP_DRAW_INDIRECT_MULTI_1_OPCODE(INDIRECT_OP_NORMAL) |
+                     A6XX_CP_DRAW_INDIRECT_MULTI_1_DST_OFF(vs_params_offset(cmd)));
+      tu_cs_emit(cs, drawCount);
+      tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset));
+      tu_cs_emit(cs, stride);
+   }
 
    trace_end_draw(&cmd->rp_trace, cs);
 }
@@ -9347,15 +9579,25 @@ tu_CmdDrawIndexedIndirect(VkCommandBuffer commandBuffer,
 
    tu6_draw_common<CHIP>(cmd, cs, true, 0);
 
-   tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 9);
-   tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
-   tu_cs_emit(cs, A6XX_CP_DRAW_INDIRECT_MULTI_1_OPCODE(INDIRECT_OP_INDEXED) |
-                  A6XX_CP_DRAW_INDIRECT_MULTI_1_DST_OFF(vs_params_offset(cmd)));
-   tu_cs_emit(cs, drawCount);
-   tu_cs_emit_qw(cs, cmd->state.index_va);
-   tu_cs_emit(cs, cmd->state.max_index_count);
-   tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset));
-   tu_cs_emit(cs, stride);
+   if constexpr (CHIP == A5XX) {
+      for (uint32_t i = 0; i < drawCount; i++) {
+         tu_cs_emit_pkt7(cs, CP_DRAW_INDX_INDIRECT, 6);
+         tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+         tu_cs_emit_qw(cs, cmd->state.index_va);
+         tu_cs_emit(cs, cmd->state.max_index_count);
+         tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset + static_cast<uint64_t>(i) * stride));
+      }
+   } else {
+      tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 9);
+      tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+      tu_cs_emit(cs, A6XX_CP_DRAW_INDIRECT_MULTI_1_OPCODE(INDIRECT_OP_INDEXED) |
+                     A6XX_CP_DRAW_INDIRECT_MULTI_1_DST_OFF(vs_params_offset(cmd)));
+      tu_cs_emit(cs, drawCount);
+      tu_cs_emit_qw(cs, cmd->state.index_va);
+      tu_cs_emit(cs, cmd->state.max_index_count);
+      tu_cs_emit_qw(cs, vk_buffer_address(&buf->vk, offset));
+      tu_cs_emit(cs, stride);
+   }
 
    trace_end_draw(&cmd->rp_trace, cs);
 }
@@ -9546,7 +9788,7 @@ tu_install_sw_multiview_draw_entrypoints(
    const struct fd_dev_info *info)
 {
    assert(!info->props.has_hw_multiview);
-   FD_CALLX(info, tu_install_sw_multiview_draws)(dispatch_table);
+   TU_CALLX_INFO(info, tu_install_sw_multiview_draws)(dispatch_table);
 }
 
 struct tu_dispatch_info
@@ -9707,23 +9949,43 @@ tu_emit_compute_driver_params(struct tu_cmd_buffer *cmd,
          assert(num_consts <= dword_sizeof(driver_params));
 
          /* push constants */
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3 + num_consts);
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-                  CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-                  CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-                  CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-                  CP_LOAD_STATE6_0_NUM_UNIT(num_consts / 4));
-         tu_cs_emit(cs, 0);
-         tu_cs_emit(cs, 0);
+         if constexpr (CHIP == A5XX) {
+            tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3 + num_consts);
+            tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(offset) |
+                     CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+                     CP_LOAD_STATE4_0_STATE_BLOCK(SB4_CS_SHADER) |
+                     CP_LOAD_STATE4_0_NUM_UNIT(num_consts / 4));
+            tu_cs_emit(cs, CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS));
+            tu_cs_emit(cs, 0);
+         } else {
+            tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3 + num_consts);
+            tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                     CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                     CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+                     CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                     CP_LOAD_STATE6_0_NUM_UNIT(num_consts / 4));
+            tu_cs_emit(cs, 0);
+            tu_cs_emit(cs, 0);
+         }
          tu_cs_emit_array(cs, reinterpret_cast<uint32_t *>(&driver_params), num_consts);
       } else if (!(info->indirect & 0xf)) {
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-                     CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-                     CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
-                     CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-                     CP_LOAD_STATE6_0_NUM_UNIT(1));
-         tu_cs_emit_qw(cs, info->indirect);
+         if constexpr (CHIP == A5XX) {
+            tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3);
+            tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(offset) |
+                        CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
+                        CP_LOAD_STATE4_0_STATE_BLOCK(SB4_CS_SHADER) |
+                        CP_LOAD_STATE4_0_NUM_UNIT(1));
+            tu_cs_emit_qw(cs, info->indirect |
+                          static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
+         } else {
+            tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
+            tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                        CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                        CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                        CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                        CP_LOAD_STATE6_0_NUM_UNIT(1));
+            tu_cs_emit_qw(cs, info->indirect);
+         }
       } else {
          /* Vulkan guarantees only 4 byte alignment for indirect_offset.
           * However, CP_LOAD_STATE.EXT_SRC_ADDR needs 16 byte alignment.
@@ -9743,13 +10005,23 @@ tu_emit_compute_driver_params(struct tu_cmd_buffer *cmd,
          tu_emit_event_write<CHIP>(cmd, cs, FD_CACHE_INVALIDATE);
          tu_cs_emit_wfi(cs);
 
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-                     CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-                     CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
-                     CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-                     CP_LOAD_STATE6_0_NUM_UNIT(1));
-         tu_cs_emit_qw(cs, global_iova(cmd, cs_indirect_xyz[0]));
+         if constexpr (CHIP == A5XX) {
+            tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 3);
+            tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(offset) |
+                        CP_LOAD_STATE4_0_STATE_SRC(SS4_INDIRECT) |
+                        CP_LOAD_STATE4_0_STATE_BLOCK(SB4_CS_SHADER) |
+                        CP_LOAD_STATE4_0_NUM_UNIT(1));
+            tu_cs_emit_qw(cs, global_iova(cmd, cs_indirect_xyz[0]) |
+                          static_cast<uint64_t>(CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS)));
+         } else {
+            tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
+            tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                        CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                        CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                        CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                        CP_LOAD_STATE6_0_NUM_UNIT(1));
+            tu_cs_emit_qw(cs, global_iova(cmd, cs_indirect_xyz[0]));
+         }
       }
 
       /* Fill out IR3_DP_CS_SUBGROUP_SIZE and IR3_DP_SUBGROUP_ID_SHIFT for
@@ -9757,13 +10029,23 @@ tu_emit_compute_driver_params(struct tu_cmd_buffer *cmd,
        */
       if (info->indirect && num_consts > IR3_DP_CS(base_group_x)) {
          bool emit_local = num_consts > IR3_DP_CS(local_group_size_x);
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 7 + (emit_local ? 4 : 0));
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset + (IR3_DP_CS(base_group_x) / 4)) |
-                  CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-                  CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-                  CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-                  CP_LOAD_STATE6_0_NUM_UNIT((num_consts - IR3_DP_CS(base_group_x)) / 4));
-         tu_cs_emit_qw(cs, 0);
+         if constexpr (CHIP == A5XX) {
+            tu_cs_emit_pkt7(cs, CP_LOAD_STATE4, 7 + (emit_local ? 4 : 0));
+            tu_cs_emit(cs, CP_LOAD_STATE4_0_DST_OFF(offset + (IR3_DP_CS(base_group_x) / 4)) |
+                     CP_LOAD_STATE4_0_STATE_SRC(SS4_DIRECT) |
+                     CP_LOAD_STATE4_0_STATE_BLOCK(SB4_CS_SHADER) |
+                     CP_LOAD_STATE4_0_NUM_UNIT((num_consts - IR3_DP_CS(base_group_x)) / 4));
+            tu_cs_emit(cs, CP_LOAD_STATE4_1_STATE_TYPE(ST4_CONSTANTS));
+            tu_cs_emit(cs, 0);
+         } else {
+            tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 7 + (emit_local ? 4 : 0));
+            tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset + (IR3_DP_CS(base_group_x) / 4)) |
+                     CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                     CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+                     CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                     CP_LOAD_STATE6_0_NUM_UNIT((num_consts - IR3_DP_CS(base_group_x)) / 4));
+            tu_cs_emit_qw(cs, 0);
+         }
          tu_cs_emit(cs, 0); /* BASE_GROUP_X */
          tu_cs_emit(cs, 0); /* BASE_GROUP_Y */
          tu_cs_emit(cs, 0); /* BASE_GROUP_Z */
@@ -9818,7 +10100,7 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
     *
     * See https://gitlab.freedesktop.org/mesa/mesa/-/issues/5892
     */
-   if (emit_instrlen_workaround) {
+   if (CHIP >= A6XX && emit_instrlen_workaround) {
       tu_cs_emit_regs(cs, A6XX_SP_PS_INSTR_SIZE(shader->variant->instrlen));
       tu_emit_event_write<CHIP>(cmd, cs, FD_LABEL);
    }
@@ -9940,6 +10222,8 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
 
          /* write scratch0 to SP_CS_KERNEL_GROUP_X */
          cs->scratch_to_reg(SP_CS_KERNEL_GROUP_X(CHIP), tu_scratch(tu_dispatch.scratch0), 1);
+      } else if (CHIP == A5XX) {
+         tu5_emit_cs_ndrange(cs, local_size, num_groups);
       } else {
          tu_cs_emit_regs(cs,
                          SP_CS_NDRANGE_0(CHIP, .kerneldim = 3,
@@ -9960,6 +10244,8 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
                                                       .localsizey = last_local_size[1] - 1,
                                                       .localsizez = last_local_size[2] - 1));
       }
+   } else if (CHIP == A5XX) {
+      tu5_emit_cs_ndrange(cs, local_size, num_groups);
    } else {
       tu_cs_emit_regs(cs,
                       SP_CS_NDRANGE_0(CHIP, .kerneldim = 3,
@@ -10482,7 +10768,7 @@ tu_write_event(struct tu_cmd_buffer *cmd, struct tu_event *event,
       tu_cs_emit(cs, value);
    } else {
       /* Use a RB_DONE_TS event to wait for everything to complete. */
-      if (CHIP == A6XX) {
+      if (CHIP <= A6XX) {
          tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 4);
          tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS));
       } else {
@@ -10673,7 +10959,7 @@ tu_CmdWriteBufferMarker2AMD(VkCommandBuffer commandBuffer,
       tu_cs_emit(cs, marker);
    } else {
       /* Use a RB_DONE_TS event to wait for everything to complete. */
-      if (CHIP == A6XX) {
+      if (CHIP <= A6XX) {
          tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 4);
          tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS));
       } else {

@@ -59,6 +59,39 @@ struct tu_const_state
    struct ir3_driver_ubo bindless_base_addrs_ubo;
 };
 
+#define TU5_MAX_TEX_BINDINGS   128
+#define TU5_MAX_SAMP_BINDINGS  16
+#define TU5_MAX_UBO_BINDINGS   32
+#define TU5_MAX_SSBO_BINDINGS  32
+#define TU5_MAX_IMAGE_BINDINGS 32
+
+struct tu5_binding_ref {
+   uint8_t set;
+   uint8_t is_dynamic : 1;
+   uint8_t has_immutable_sampler : 1;
+   uint8_t is_input_attachment : 1;
+   uint16_t binding;
+   uint32_t array_index;
+};
+
+struct tu5_immutable_samp_desc {
+   uint32_t dword[4];
+};
+
+struct tu5_shader_bindings {
+   uint8_t num_tex;
+   uint8_t num_samp;
+   uint8_t num_ubo;
+   uint8_t num_ssbo;
+   uint8_t num_image;
+   struct tu5_binding_ref tex[TU5_MAX_TEX_BINDINGS];
+   struct tu5_binding_ref samp[TU5_MAX_SAMP_BINDINGS];
+   struct tu5_immutable_samp_desc imm_samp[TU5_MAX_SAMP_BINDINGS];
+   struct tu5_binding_ref ubo[TU5_MAX_UBO_BINDINGS];
+   struct tu5_binding_ref ssbo[TU5_MAX_SSBO_BINDINGS];
+   struct tu5_binding_ref image[TU5_MAX_IMAGE_BINDINGS];
+};
+
 struct tu_shader
 {
    struct vk_pipeline_cache_object base;
@@ -76,6 +109,8 @@ struct tu_shader
    struct tu_draw_state safe_const_binning_state;
 
    struct tu_const_state const_state;
+   struct tu5_shader_bindings *tu5_bindings;
+   uint64_t tu5_binary_iova;
    uint32_t view_mask;
    uint8_t active_desc_sets;
 
@@ -220,6 +255,26 @@ tu6_emit_gs(struct tu_cs *cs, const struct ir3_shader_variant *hs);
 template <chip CHIP>
 void
 tu6_emit_fs(struct tu_cs *cs, const struct ir3_shader_variant *fs);
+
+void
+tu5_emit_variant(struct tu_cs *cs,
+                 mesa_shader_stage stage,
+                 const struct ir3_shader_variant *xs,
+                 const struct tu_pvtmem_config *pvtmem_config,
+                 uint32_t view_mask,
+                 uint64_t binary_iova);
+
+void
+tu5_emit_program_config(struct tu_cs *cs,
+                        const struct ir3_shader_variant *vs,
+                        const struct ir3_shader_variant *fs,
+                        uint64_t vs_iova,
+                        uint64_t fs_iova);
+
+void
+tu5_emit_vpc(struct tu_cs *cs,
+             const struct ir3_shader_variant *vs,
+             const struct ir3_shader_variant *fs);
 
 void
 tu_lower_nir(struct tu_device *dev,
