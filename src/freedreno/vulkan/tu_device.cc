@@ -222,8 +222,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_16bit_storage = device->info->props.storage_16bit,
       .KHR_acceleration_structure = has_raytracing,
       .KHR_bind_memory2 = true,
-      /* ir3_a4xx lacks load_global/store_global/atomic_global */
-      .KHR_buffer_device_address = !is_a5xx,
+      .KHR_buffer_device_address = true,
       .KHR_calibrated_timestamps = device->info->props.has_persistent_counter,
       .KHR_compute_shader_derivatives = true,
       .KHR_copy_commands2 = true,
@@ -579,7 +578,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->separateDepthStencilLayouts         = true;
    features->hostQueryReset                      = true;
    features->timelineSemaphore                   = true;
-   features->bufferDeviceAddress                 = !is_a5xx;
+   features->bufferDeviceAddress                 = true;
    features->bufferDeviceAddressCaptureReplay    = !is_a5xx && pdevice->has_set_iova;
    features->bufferDeviceAddressMultiDevice      = false;
    features->vulkanMemoryModel                   = true;

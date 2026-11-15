@@ -377,10 +377,158 @@ emit_intrinsic_atomic_image(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    return atomic;
 }
 
+static void
+a5xx_add_u64_u32(struct ir3_builder *b, struct ir3_instruction *lo,
+                 struct ir3_instruction *hi, struct ir3_instruction *add_lo,
+                 struct ir3_instruction **out_lo,
+                 struct ir3_instruction **out_hi)
+{
+   struct ir3_instruction *new_lo = ir3_ADD_U(b, lo, 0, add_lo, 0);
+   if (hi) {
+      struct ir3_instruction *carry = ir3_CMPS_U(b, new_lo, 0, lo, 0);
+      carry->cat2.condition = IR3_COND_LT;
+      *out_hi = ir3_ADD_U(b, hi, 0, carry, 0);
+   } else {
+      *out_hi = NULL;
+   }
+   *out_lo = new_lo;
+}
+
+static void
+a5xx_add_u64_const(struct ir3_builder *b, struct ir3_instruction **lo,
+                   struct ir3_instruction **hi, uint64_t uoff)
+{
+   if (uoff == 0)
+      return;
+
+   uint32_t lo_add = (uint32_t)uoff;
+   uint32_t hi_add = (uint32_t)(uoff >> 32);
+
+   if (lo_add != 0)
+      a5xx_add_u64_u32(b, *lo, *hi, create_immed(b, lo_add), lo, hi);
+   if (*hi && hi_add != 0)
+      *hi = ir3_ADD_U(b, *hi, 0, create_immed(b, hi_add), 0);
+}
+
+/* A5xx lacks ldg.a/stg.a, so fold any dynamic or out-of-range byte offset into
+ * the 64-bit base VA before emitting scalar-offset ldg/stg.
+ */
+static void
+a5xx_global_addr(struct ir3_context *ctx, nir_intrinsic_instr *intr,
+                 unsigned addr_src_idx, int off_src_idx,
+                 struct ir3_instruction **out_lo,
+                 struct ir3_instruction **out_hi, int32_t *out_imm)
+{
+   struct ir3_builder *b = &ctx->build;
+   struct ir3_instruction *const *base = ir3_get_src(ctx, &intr->src[addr_src_idx]);
+   struct ir3_instruction *lo = base[0];
+   struct ir3_instruction *hi = ctx->compiler->is_64bit ? base[1] : NULL;
+   int64_t const_off = 0;
+
+   if (off_src_idx >= 0) {
+      unsigned shift = nir_intrinsic_offset_shift(intr);
+      const_off = nir_intrinsic_base(intr);
+
+      if (nir_src_is_const(intr->src[off_src_idx])) {
+         const_off += (int64_t)nir_src_as_uint(intr->src[off_src_idx]) << shift;
+      } else {
+         struct ir3_instruction *off = ir3_get_src(ctx, &intr->src[off_src_idx])[0];
+         if (shift > 0)
+            off = ir3_SHL_B(b, off, 0, create_immed(b, shift), 0);
+         a5xx_add_u64_u32(b, lo, hi, off, &lo, &hi);
+      }
+   }
+
+   if (const_off >= -4096 && const_off <= 4095) {
+      *out_imm = (int32_t)const_off;
+   } else {
+      a5xx_add_u64_const(b, &lo, &hi, (uint64_t)const_off);
+      *out_imm = 0;
+   }
+
+   *out_lo = lo;
+   *out_hi = hi;
+}
+
+static struct ir3_instruction *
+a5xx_pack_global_addr(struct ir3_context *ctx, struct ir3_instruction *lo,
+                      struct ir3_instruction *hi)
+{
+   if (hi)
+      return ir3_collect(&ctx->build, lo, hi);
+   return lo;
+}
+
+static void
+emit_intrinsic_load_global(struct ir3_context *ctx, nir_intrinsic_instr *intr,
+                           struct ir3_instruction **dst)
+{
+   struct ir3_builder *b = &ctx->build;
+   struct ir3_instruction *lo, *hi;
+   int32_t imm = 0;
+   int off_src_idx =
+      intr->intrinsic == nir_intrinsic_load_global_offset ? 1 : -1;
+
+   a5xx_global_addr(ctx, intr, 0, off_src_idx, &lo, &hi, &imm);
+
+   struct ir3_instruction *addr = a5xx_pack_global_addr(ctx, lo, hi);
+   struct ir3_instruction *load =
+      ir3_LDG(b, addr, 0, create_immed(b, imm), 0,
+              create_immed(b, intr->num_components), 0);
+
+   load->cat6.type = type_uint_size(intr->def.bit_size);
+   load->dsts[0]->wrmask = MASK(intr->num_components);
+   load->barrier_class = IR3_BARRIER_BUFFER_R;
+   load->barrier_conflict = IR3_BARRIER_BUFFER_W;
+
+   ir3_split_dest(b, dst, load, 0, intr->num_components);
+}
+
+static void
+emit_intrinsic_store_global(struct ir3_context *ctx, nir_intrinsic_instr *intr)
+{
+   struct ir3_builder *b = &ctx->build;
+   struct ir3_instruction *const *value = ir3_get_src(ctx, &intr->src[0]);
+   struct ir3_instruction *lo, *hi;
+   int32_t imm = 0;
+   int off_src_idx =
+      intr->intrinsic == nir_intrinsic_store_global_offset ? 2 : -1;
+
+   a5xx_global_addr(ctx, intr, 1, off_src_idx, &lo, &hi, &imm);
+
+   unsigned elem_bytes = intr->src[0].ssa->bit_size / 8;
+   unsigned wrmask = nir_intrinsic_write_mask(intr);
+
+   while (wrmask) {
+      int start, count;
+      u_bit_scan_consecutive_range(&wrmask, &start, &count);
+
+      int32_t st_imm = imm + start * (int32_t)elem_bytes;
+      struct ir3_instruction *st_lo = lo;
+      struct ir3_instruction *st_hi = hi;
+
+      if (st_imm < -4096 || st_imm > 4095) {
+         a5xx_add_u64_const(b, &st_lo, &st_hi, (uint64_t)(int64_t)st_imm);
+         st_imm = 0;
+      }
+
+      struct ir3_instruction *addr = a5xx_pack_global_addr(ctx, st_lo, st_hi);
+      struct ir3_instruction *stg =
+         ir3_STG(b, addr, 0, create_immed(b, st_imm), 0,
+                 ir3_create_collect(b, &value[start], count), 0,
+                 create_immed(b, count), 0);
+      stg->cat6.type = type_uint_size(intr->src[0].ssa->bit_size);
+      stg->barrier_class = IR3_BARRIER_BUFFER_W;
+      stg->barrier_conflict = IR3_BARRIER_BUFFER_R | IR3_BARRIER_BUFFER_W;
+
+      array_insert(ctx->block, ctx->block->keeps, stg);
+   }
+}
+
 static struct ir3_instruction *
 emit_intrinsic_atomic_global(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 {
-   UNREACHABLE("Global atomic are unimplemented on A5xx");
+   ir3_context_error(ctx, "Global atomics are unimplemented on A5xx\n");
 }
 
 const struct ir3_context_funcs ir3_a4xx_funcs = {
@@ -391,5 +539,7 @@ const struct ir3_context_funcs ir3_a4xx_funcs = {
    .emit_intrinsic_store_image = emit_intrinsic_store_image,
    .emit_intrinsic_atomic_image = emit_intrinsic_atomic_image,
    .emit_intrinsic_image_size = emit_intrinsic_image_size_tex,
+   .emit_intrinsic_load_global = emit_intrinsic_load_global,
+   .emit_intrinsic_store_global = emit_intrinsic_store_global,
    .emit_intrinsic_atomic_global = emit_intrinsic_atomic_global,
 };
