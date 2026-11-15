@@ -439,7 +439,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .NV_compute_shader_derivatives = true,
       .QCOM_fragment_density_map_offset = !is_a5xx,
       .QCOM_image_processing = device->info->props.has_image_processing,
-      .QCOM_multiview_per_view_render_areas = !is_a5xx,
+      .QCOM_multiview_per_view_render_areas = true,
       .QCOM_multiview_per_view_viewports =
          device->info->props.has_per_view_viewport,
       .QCOM_render_pass_shader_resolve = !is_a5xx,
@@ -971,7 +971,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->multiviewPerViewViewports = !is_a5xx;
 
    /* QCOM_multiview_per_view_render_areas */
-   features->multiviewPerViewRenderAreas = !is_a5xx;
+   features->multiviewPerViewRenderAreas = true;
 
 #ifdef TU_USE_WSI_PLATFORM
    /* VK_EXT_present_timing */
