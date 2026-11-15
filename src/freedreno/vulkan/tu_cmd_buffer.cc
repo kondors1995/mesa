@@ -1724,6 +1724,39 @@ tu7_emit_sysmem_render_begin_regs(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu_cs_emit_regs(cs, RB_CLEAR_TARGET(CHIP, .clear_mode = CLEAR_MODE_SYSMEM));
 }
 
+static bool
+tu5_calc_tile_resolve_scissor(const struct tu_cmd_buffer *cmd,
+                              const struct tu_tiling_config *tiling,
+                              const struct tu_tile_config *tile,
+                              uint32_t *rx1_out, uint32_t *ry1_out,
+                              uint32_t *rx2_out, uint32_t *ry2_out)
+{
+   const struct tu_framebuffer *fb = cmd->state.framebuffer;
+   uint32_t x1 = tiling->tile0.width * tile->pos.x;
+   uint32_t y1 = tiling->tile0.height * tile->pos.y;
+   uint32_t x2 = MIN2(x1 + tiling->tile0.width, MAX_VIEWPORT_SIZE);
+   uint32_t y2 =
+      MIN2(y1 + tiling->tile0.height * tile->gmem_extent.height,
+           MAX_VIEWPORT_SIZE);
+
+   uint32_t rx1 = x1;
+   uint32_t ry1 = y1;
+   uint32_t rx2 = MIN2(x2, fb->width);
+   uint32_t ry2 = MIN2(y2, fb->height);
+   if (!cmd->state.per_layer_render_area) {
+      const VkRect2D *ra = &cmd->state.render_areas[0];
+      rx1 = MAX2(rx1, static_cast<uint32_t>(ra->offset.x));
+      ry1 = MAX2(ry1, static_cast<uint32_t>(ra->offset.y));
+      rx2 = MIN2(rx2, static_cast<uint32_t>(ra->offset.x + ra->extent.width));
+      ry2 = MIN2(ry2, static_cast<uint32_t>(ra->offset.y + ra->extent.height));
+   }
+   *rx1_out = rx1;
+   *ry1_out = ry1;
+   *rx2_out = rx2;
+   *ry2_out = ry2;
+   return rx2 > rx1 && ry2 > ry1;
+}
+
 template <chip CHIP>
 static void
 tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
@@ -1824,21 +1857,12 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
    tu6_emit_window_offset<CHIP>(cs, x1, y1);
 
    if constexpr (CHIP == A5XX) {
-      uint32_t rx1 = x1;
-      uint32_t ry1 = y1;
-      uint32_t rx2 = MIN2(x2, fb->width);
-      uint32_t ry2 = MIN2(y2, fb->height);
-      if (!cmd->state.per_layer_render_area) {
-         const VkRect2D *ra = &cmd->state.render_areas[0];
-         rx1 = MAX2(rx1, static_cast<uint32_t>(ra->offset.x));
-         ry1 = MAX2(ry1, static_cast<uint32_t>(ra->offset.y));
-         rx2 = MIN2(rx2, static_cast<uint32_t>(ra->offset.x + ra->extent.width));
-         ry2 = MIN2(ry2, static_cast<uint32_t>(ra->offset.y + ra->extent.height));
-      }
-      if (rx2 > rx1 && ry2 > ry1) {
+      uint32_t rx1, ry1, rx2, ry2;
+      if (tu5_calc_tile_resolve_scissor(cmd, tiling, tile,
+                                        &rx1, &ry1, &rx2, &ry2)) {
          tu5_emit_resolve_scissor(cs, rx1, ry1, rx2 - 1, ry2 - 1);
       } else {
-         tu5_emit_resolve_scissor(cs, 1, 1, 0, 0);
+         tu5_emit_resolve_scissor(cs, x1, y1, x1, y1);
       }
    }
 
@@ -4297,6 +4321,14 @@ tu_cmd_render_tiles(struct tu_cmd_buffer *cmd,
                } else {
                   tu_calc_bin_visibility(cmd, tile, fdm_offsets);
                   tu_identity_frag_area(cmd, tile);
+
+                  if constexpr (CHIP == A5XX) {
+                     uint32_t rx1, ry1, rx2, ry2;
+                     if (!cmd->state.per_layer_render_area &&
+                         !tu5_calc_tile_resolve_scissor(cmd, tiling, tile,
+                                                        &rx1, &ry1, &rx2, &ry2))
+                        continue;
+                  }
                }
 
 #ifdef HAVE_PERFETTO
@@ -8990,6 +9022,10 @@ tu7_emit_fs_params(struct tu_cmd_buffer *cmd)
 static void
 tu_emit_fs_params(struct tu_cmd_buffer *cmd)
 {
+   if (cmd->device->physical_device->info->chip == 5) {
+      cmd->state.fs_params = (struct tu_draw_state) {};
+      return;
+   }
    if (cmd->device->compiler->info->props.load_shader_consts_via_preamble)
       tu7_emit_fs_params(cmd);
    else

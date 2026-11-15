@@ -807,15 +807,16 @@ tu5_gmem_restore_format(enum pipe_format format)
 }
 
 static void
-tu5_emit_blit_bypass_state(struct tu_cs *cs,
-                           uint32_t tile_w,
-                           uint32_t tile_h,
-                           VkSampleCountFlagBits samples)
+tu5_emit_blit_state(struct tu_cs *cs,
+                    uint32_t tile_w,
+                    uint32_t tile_h,
+                    VkSampleCountFlagBits samples,
+                    bool bypass)
 {
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_CNTL, 1);
    tu_cs_emit(cs, A5XX_RB_CNTL_WIDTH(tile_w) |
                   A5XX_RB_CNTL_HEIGHT(tile_h) |
-                  A5XX_RB_CNTL_BYPASS);
+                  COND(bypass, A5XX_RB_CNTL_BYPASS));
 
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_RENDER_CNTL, 1);
    tu_cs_emit(cs, 0);
@@ -907,7 +908,8 @@ tu5_load_gmem_attachment(struct tu_cmd_buffer *cmd,
       return;
    }
 
-   tu5_emit_blit_bypass_state(cs, tile_w, tile_h, att->samples);
+   /* mem2gmem transfers sysmem -> GMEM via RB_MRT -> RB_BLIT_DST in bypass. */
+   tu5_emit_blit_state(cs, tile_w, tile_h, att->samples, true);
 
    if (is_d32s8) {
       if (att->load || force_load) {
@@ -1015,8 +1017,9 @@ tu5_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
                                vk_format_to_pipe_format(att->format),
                                clear_vals);
 
-      tu5_emit_blit_bypass_state(cs, tiling->tile0.width, tiling->tile0.height,
-                                 att->samples);
+      /* GMEM fast-clear targets RB_MRT / RB_DEPTH_BUFFER directly, not bypass. */
+      tu5_emit_blit_state(cs, tiling->tile0.width, tiling->tile0.height,
+                          att->samples, false);
 
       enum a5xx_blit_buf buf;
       uint32_t clear_mask = 0xf;
@@ -1170,7 +1173,8 @@ tu5_store_gmem_attachment(struct tu_cmd_buffer *cmd,
    const bool is_zs = vk_format_is_depth_or_stencil(src->format);
    const bool is_d32s8 = src->format == VK_FORMAT_D32_SFLOAT_S8_UINT;
 
-   tu5_emit_blit_bypass_state(cs, tile_w, tile_h, src->samples);
+   /* gmem2mem resolves GMEM -> RB_BLIT_DST sysmem without RB_CNTL_BYPASS. */
+   tu5_emit_blit_state(cs, tile_w, tile_h, src->samples, false);
 
    if (is_d32s8) {
       enum a5xx_depth_format fmt = (enum a5xx_depth_format)
