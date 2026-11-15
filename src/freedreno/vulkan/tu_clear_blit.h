@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 
+#include "util/format/u_format.h"
 #include "vulkan/vulkan_core.h"
 
 #include "common/fd_hw_common.h"
@@ -104,6 +105,11 @@ tu_store_gmem_attachment(struct tu_cmd_buffer *cmd,
 
 void
 tu_choose_gmem_layout(struct tu_cmd_buffer *cmd);
+
+void
+tu_pack_blit_clear_value(const VkClearValue *val,
+                         enum pipe_format format,
+                         uint32_t clear_value[4]);
 
 void
 tu_cmd_fill_buffer_addr(VkCommandBuffer commandBuffer,

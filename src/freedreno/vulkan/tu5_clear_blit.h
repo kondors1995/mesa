@@ -76,4 +76,23 @@ void tu5_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
                                   uint32_t rect_count,
                                   const VkClearRect *rects);
 
+void tu5_load_gmem_attachment(struct tu_cmd_buffer *cmd,
+                              struct tu_cs *cs,
+                              uint32_t a,
+                              uint32_t gmem_a,
+                              bool force_load);
+
+void tu5_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
+                               struct tu_cs *cs,
+                               bool per_layer_render_area,
+                               uint32_t a);
+
+void tu5_store_gmem_attachment(struct tu_cmd_buffer *cmd,
+                               struct tu_cs *cs,
+                               uint32_t a,
+                               uint32_t gmem_a,
+                               uint32_t layers,
+                               uint32_t layer_mask,
+                               bool per_layer_render_area);
+
 #endif /* TU5_CLEAR_BLIT_H */

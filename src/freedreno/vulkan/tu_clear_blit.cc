@@ -2355,6 +2355,14 @@ pack_blit_event_clear_value(const VkClearValue *val, enum pipe_format format, ui
 #undef PACK_F
 }
 
+void
+tu_pack_blit_clear_value(const VkClearValue *val,
+                         enum pipe_format format,
+                         uint32_t clear_value[4])
+{
+   pack_blit_event_clear_value(val, format, clear_value);
+}
+
 static void
 event_blit_setup(struct tu_cs *cs,
                  uint32_t buffer_id,

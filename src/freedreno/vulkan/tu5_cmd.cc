@@ -1273,7 +1273,8 @@ tu5_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 void
 tu5_emit_zs(struct tu_cmd_buffer *cmd,
             const struct tu_subpass *subpass,
-            struct tu_cs *cs)
+            struct tu_cs *cs,
+            bool gmem)
 {
    const uint32_t a = subpass->depth_stencil_attachment.attachment;
    if (a == VK_ATTACHMENT_UNUSED) {
@@ -1304,11 +1305,30 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
    const struct fdl6_view *depth_view = tu_image_view_fdl_view(iview, false);
    const struct fdl6_view *stencil_view = tu_image_view_fdl_view(iview, true);
 
+   uint64_t depth_base;
+   uint32_t depth_pitch;
+   uint32_t depth_layer_size;
+   if (gmem) {
+      const uint32_t tile_w = cmd->state.tiling->tile0.width;
+      const uint32_t tile_h = cmd->state.tiling->tile0.height;
+      const uint32_t depth_cpp =
+         attachment->format == VK_FORMAT_D32_SFLOAT_S8_UINT
+            ? 4 * attachment->samples
+            : attachment->cpp;
+      depth_base = tu_attachment_gmem_offset(cmd, attachment, layer);
+      depth_pitch = tile_w * depth_cpp;
+      depth_layer_size = depth_pitch * tile_h;
+   } else {
+      depth_base = tu_layer_address(depth_view, layer);
+      depth_pitch = depth_view->pitch;
+      depth_layer_size = depth_view->layer_size;
+   }
+
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_DEPTH_BUFFER_INFO, 5);
    tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_INFO_DEPTH_FORMAT(fmt));
-   tu_cs_emit_qw(cs, tu_layer_address(depth_view, layer));
-   tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_PITCH(depth_view->pitch));
-   tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_ARRAY_PITCH(depth_view->layer_size));
+   tu_cs_emit_qw(cs, depth_base);
+   tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_PITCH(depth_pitch));
+   tu_cs_emit(cs, A5XX_RB_DEPTH_BUFFER_ARRAY_PITCH(depth_layer_size));
 
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_SU_DEPTH_BUFFER_INFO, 1);
    tu_cs_emit(cs, A5XX_GRAS_SU_DEPTH_BUFFER_INFO_DEPTH_FORMAT(fmt));
@@ -1319,11 +1339,28 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
 
    if (attachment->format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
        attachment->format == VK_FORMAT_S8_UINT) {
+      uint64_t stencil_base;
+      uint32_t stencil_pitch;
+      uint32_t stencil_layer_size;
+      if (gmem) {
+         const uint32_t tile_w = cmd->state.tiling->tile0.width;
+         const uint32_t tile_h = cmd->state.tiling->tile0.height;
+         stencil_base = attachment->format == VK_FORMAT_D32_SFLOAT_S8_UINT
+                           ? tu_attachment_gmem_offset_stencil(cmd, attachment, layer)
+                           : depth_base;
+         stencil_pitch = tile_w * attachment->samples;
+         stencil_layer_size = stencil_pitch * tile_h;
+      } else {
+         stencil_base = tu_layer_address(stencil_view, layer);
+         stencil_pitch = stencil_view->pitch;
+         stencil_layer_size = stencil_view->layer_size;
+      }
+
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_STENCIL_INFO, 5);
       tu_cs_emit(cs, A5XX_RB_STENCIL_INFO_SEPARATE_STENCIL);
-      tu_cs_emit_qw(cs, tu_layer_address(stencil_view, layer));
-      tu_cs_emit(cs, A5XX_RB_STENCIL_PITCH(stencil_view->pitch));
-      tu_cs_emit(cs, A5XX_RB_STENCIL_ARRAY_PITCH(stencil_view->layer_size));
+      tu_cs_emit_qw(cs, stencil_base);
+      tu_cs_emit(cs, A5XX_RB_STENCIL_PITCH(stencil_pitch));
+      tu_cs_emit(cs, A5XX_RB_STENCIL_ARRAY_PITCH(stencil_layer_size));
    } else {
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_STENCIL_INFO, 1);
       tu_cs_emit(cs, 0);
@@ -1333,7 +1370,8 @@ tu5_emit_zs(struct tu_cmd_buffer *cmd,
 void
 tu5_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
-             struct tu_cs *cs)
+             struct tu_cs *cs,
+             bool gmem)
 {
    const uint32_t layer = cmd->state.sw_multiview ? cmd->state.sw_view_index : 0;
    const bool dither = subpass->legacy_dithering_enabled;
@@ -1347,15 +1385,34 @@ tu5_emit_mrt(struct tu_cmd_buffer *cmd,
          continue;
 
       const struct tu_image_view *iview = cmd->state.attachments[a];
+      const struct tu_render_pass_attachment *att =
+         &cmd->state.pass->attachments[a];
       uint32_t buf_info = iview->view.RB_MRT_BUF_INFO;
       if (dither)
          buf_info |= A5XX_RB_MRT_BUF_INFO_DITHER_MODE(DITHER_ALWAYS);
 
+      uint64_t base;
+      uint32_t pitch;
+      uint32_t layer_size;
+      if (gmem) {
+         const uint32_t tile_w = cmd->state.tiling->tile0.width;
+         const uint32_t tile_h = cmd->state.tiling->tile0.height;
+         buf_info &= ~A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE__MASK;
+         buf_info |= A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(TILE5_2) | 0x800;
+         pitch = tile_w * att->cpp;
+         layer_size = pitch * tile_h;
+         base = tu_attachment_gmem_offset(cmd, att, layer);
+      } else {
+         pitch = iview->view.pitch;
+         layer_size = iview->view.layer_size;
+         base = tu_layer_address(&iview->view, layer);
+      }
+
       tu_cs_emit_pkt4(cs, REG_A5XX_RB_MRT_BUF_INFO(remapped), 5);
       tu_cs_emit(cs, buf_info);
-      tu_cs_emit(cs, A5XX_RB_MRT_PITCH(iview->view.pitch));
-      tu_cs_emit(cs, A5XX_RB_MRT_ARRAY_PITCH(iview->view.layer_size));
-      tu_cs_emit_qw(cs, tu_layer_address(&iview->view, layer));
+      tu_cs_emit(cs, A5XX_RB_MRT_PITCH(pitch));
+      tu_cs_emit(cs, A5XX_RB_MRT_ARRAY_PITCH(layer_size));
+      tu_cs_emit_qw(cs, base);
 
       tu_cs_emit_pkt4(cs, REG_A5XX_SP_FS_MRT_REG(remapped), 1);
       tu_cs_emit(cs, iview->view.SP_PS_MRT_REG);

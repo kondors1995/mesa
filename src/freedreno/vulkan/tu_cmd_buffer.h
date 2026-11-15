@@ -1106,12 +1106,14 @@ tu5_emit_sample_counter_addr(struct tu_cs *cs, uint64_t iova);
 void
 tu5_emit_zs(struct tu_cmd_buffer *cmd,
             const struct tu_subpass *subpass,
-            struct tu_cs *cs);
+            struct tu_cs *cs,
+            bool gmem = false);
 
 void
 tu5_emit_mrt(struct tu_cmd_buffer *cmd,
              const struct tu_subpass *subpass,
-             struct tu_cs *cs);
+             struct tu_cs *cs,
+             bool gmem = false);
 
 void
 tu5_emit_bin_size(struct tu_cs *cs,
