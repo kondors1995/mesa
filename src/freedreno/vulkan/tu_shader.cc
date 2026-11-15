@@ -1984,7 +1984,7 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
       }
    }
 
-   if (unknown_dynamic_offset) {
+   if (unknown_dynamic_offset && dev->physical_device->info->chip != 5) {
       const_state->dynamic_offset_loc =
          const_allocs->max_const_offset_vec4 * 4;
       assert(dev->physical_device->reserved_set_idx >= 0);

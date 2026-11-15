@@ -1286,7 +1286,10 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->maxFragmentInputComponents = pdevice->info->props.is_a702 ? 64 : 128;
    props->maxFragmentOutputAttachments = 8;
    props->maxFragmentDualSrcAttachments = 1;
-   props->maxFragmentCombinedOutputResources = MAX_RTS + max_descriptor_set_size * 2;
+   props->maxFragmentCombinedOutputResources =
+      pdevice->info->chip == 5
+         ? MAX_RTS + 16 + 8
+         : MAX_RTS + max_descriptor_set_size * 2;
    props->maxComputeSharedMemorySize = pdevice->info->cs_shared_mem_size;
    /* keep in sync with nir_shader_compiler_options */
    props->maxComputeWorkGroupCount[0] =
@@ -1805,7 +1808,13 @@ tu_physical_device_init(struct tu_physical_device *device,
                                         &device->config_sysmem);
       }
 
-      if (!instance->drirc.misc.dont_reserve_descriptor_set) {
+      if (device->info->chip == 5) {
+         /* A5xx resolves descriptors on the CPU via CP_LOAD_STATE4 and needs
+          * no HW bindless base slot reserved for dynamic descriptor offsets.
+          */
+         device->usable_sets = MAX_SETS;
+         device->reserved_set_idx = -1;
+      } else if (!instance->drirc.misc.dont_reserve_descriptor_set) {
          device->usable_sets = device->reserved_set_idx = device->info->props.max_sets - 1;
       } else {
          device->usable_sets = device->info->props.max_sets;
