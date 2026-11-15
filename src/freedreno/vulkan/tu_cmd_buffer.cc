@@ -1547,8 +1547,10 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       }
 
       const struct tu_render_pass *pass = cmd->state.pass;
+      bool is_dynamic_rp = (pass == &cmd->dynamic_pass);
       for (uint32_t i = 0; i < pass->subpass_count; i++) {
-         if (pass->subpasses[i].input_count > 0 ||
+         if ((!is_dynamic_rp && pass->subpasses[i].input_count > 0) ||
+             (is_dynamic_rp && cmd->state.rp.dyn_input_attachments_used) ||
              pass->subpasses[i].multiview_mask != 0) {
             cmd->state.rp.force_render_mode_reason =
                "A5XX GMEM does not support input attachments or multiview";
@@ -3199,6 +3201,11 @@ template <chip CHIP>
 static void
 tu_set_input_attachments(struct tu_cmd_buffer *cmd, const struct tu_subpass *subpass)
 {
+   if constexpr (CHIP == A5XX) {
+      cmd->state.dirty |= TU_CMD_DIRTY_DESC_SETS;
+      return;
+   }
+
    struct tu_cs *cs = &cmd->draw_cs;
 
    tu_cs_emit_pkt7(cs, CP_SET_DRAW_STATE, 6);
@@ -6646,6 +6653,7 @@ tu_render_pass_state_merge(struct tu_cmd_buffer *cmd, const struct tu_render_pas
    dst->draw_cs_writes_to_cond_pred |= src->draw_cs_writes_to_cond_pred;
    dst->shared_viewport |= src->shared_viewport;
    dst->read_only_input_attachments |= src->read_only_input_attachments;
+   dst->dyn_input_attachments_used |= src->dyn_input_attachments_used;
    dst->input_attachment_read_barrier |= src->input_attachment_read_barrier;
 
    dst->drawcall_bandwidth_per_sample_sum +=
@@ -9043,6 +9051,8 @@ tu_flush_dynamic_input_attachments(struct tu_cmd_buffer *cmd)
 
    if (!fs->fs.dynamic_input_attachments_used)
       return;
+
+   cmd->state.rp.dyn_input_attachments_used = true;
 
    /* Input attachments may read data from a load op, so we have to invalidate
     * UCHE and force pending blits to complete unless we know it's already

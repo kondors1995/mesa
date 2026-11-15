@@ -422,6 +422,70 @@ tu5_emit_consts(struct tu_cmd_buffer *cmd, bool compute)
 }
 
 static void
+tu5_emit_dyn_input_attachment_desc(struct tu_cs *cs,
+                                     const struct tu_cmd_buffer *cmd,
+                                     uint32_t att_slot,
+                                     bool is_stencil)
+{
+   static const uint32_t zero_tex[12] = {};
+   const struct tu_subpass *subpass = cmd->state.subpass;
+   if (!subpass || !cmd->state.attachments || att_slot >= subpass->input_count) {
+      tu_cs_emit_array(cs, zero_tex, 12);
+      return;
+   }
+
+   uint32_t att_idx = subpass->input_attachments[att_slot].attachment;
+   if (att_idx == VK_ATTACHMENT_UNUSED) {
+      tu_cs_emit_array(cs, zero_tex, 12);
+      return;
+   }
+
+   const struct tu_image_view *iview = cmd->state.attachments[att_idx];
+   const struct tu_render_pass_attachment *att =
+      &cmd->state.pass->attachments[att_idx];
+   if (!iview) {
+      tu_cs_emit_array(cs, zero_tex, 12);
+      return;
+   }
+
+   if (is_stencil && att->format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+      const struct fdl6_view *stencil_view = tu_image_view_fdl_view(iview, true);
+      tu_cs_emit_array(cs, stencil_view->descriptor, 12);
+      return;
+   }
+
+   uint32_t dst[12];
+   memcpy(dst, iview->view.descriptor, sizeof(dst));
+
+   if ((dst[2] & A5XX_TEX_CONST_2_TYPE__MASK) == A5XX_TEX_CONST_2_TYPE(A5XX_TEX_CUBE)) {
+      dst[2] = (dst[2] & ~A5XX_TEX_CONST_2_TYPE__MASK) |
+               A5XX_TEX_CONST_2_TYPE(A5XX_TEX_2D);
+      uint32_t depth =
+         (dst[5] & A5XX_TEX_CONST_5_DEPTH__MASK) >> A5XX_TEX_CONST_5_DEPTH__SHIFT;
+      dst[5] = (dst[5] & ~A5XX_TEX_CONST_5_DEPTH__MASK) |
+               A5XX_TEX_CONST_5_DEPTH(depth * 6);
+   }
+
+   if (is_stencil && att->format == VK_FORMAT_D24_UNORM_S8_UINT) {
+      dst[0] = (dst[0] & ~(A5XX_TEX_CONST_0_FMT__MASK |
+                           A5XX_TEX_CONST_0_SWAP__MASK |
+                           A5XX_TEX_CONST_0_SRGB |
+                           A5XX_TEX_CONST_0_SWIZ_X__MASK |
+                           A5XX_TEX_CONST_0_SWIZ_Y__MASK |
+                           A5XX_TEX_CONST_0_SWIZ_Z__MASK |
+                           A5XX_TEX_CONST_0_SWIZ_W__MASK)) |
+               A5XX_TEX_CONST_0_FMT(TFMT5_8_8_8_8_UINT) |
+               A5XX_TEX_CONST_0_SWAP(WZYX) |
+               A5XX_TEX_CONST_0_SWIZ_X(A5XX_TEX_W) |
+               A5XX_TEX_CONST_0_SWIZ_Y(A5XX_TEX_ZERO) |
+               A5XX_TEX_CONST_0_SWIZ_Z(A5XX_TEX_ZERO) |
+               A5XX_TEX_CONST_0_SWIZ_W(A5XX_TEX_ONE);
+   }
+
+   tu_cs_emit_array(cs, dst, 12);
+}
+
+static void
 tu5_emit_stage_tex_and_samp(const struct tu_cmd_buffer *cmd,
                             struct tu_cs *cs,
                             const struct tu_shader *shader,
@@ -479,6 +543,11 @@ tu5_emit_stage_tex_and_samp(const struct tu_cmd_buffer *cmd,
       tu_cs_emit(cs, CP_LOAD_STATE4_2_EXT_SRC_ADDR_HI(0));
 
       for (uint32_t i = 0; i < b->num_tex; i++) {
+         if (b->tex[i].is_dyn_ia) {
+            tu5_emit_dyn_input_attachment_desc(cs, cmd, b->tex[i].binding,
+                                               b->tex[i].is_ia_stencil);
+            continue;
+         }
          const uint32_t *desc =
             tu5_lookup_desc(cmd, shader, descriptors_state, &b->tex[i],
                             compute, NULL);

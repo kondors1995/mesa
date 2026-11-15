@@ -341,11 +341,15 @@ tu5_alloc_binding(struct tu5_binding_ref *arr,
                   uint16_t binding,
                   uint32_t array_index,
                   bool is_dynamic,
-                  bool is_input_attachment)
+                  bool is_input_attachment,
+                  bool is_dyn_ia = false,
+                  bool is_ia_stencil = false)
 {
    for (uint8_t i = 0; i < *count; i++) {
       if (arr[i].set == set && arr[i].binding == binding &&
-          arr[i].array_index == array_index)
+          arr[i].array_index == array_index &&
+          arr[i].is_dyn_ia == is_dyn_ia &&
+          arr[i].is_ia_stencil == is_ia_stencil)
          return i;
    }
 
@@ -359,6 +363,8 @@ tu5_alloc_binding(struct tu5_binding_ref *arr,
       .is_dynamic = is_dynamic,
       .has_immutable_sampler = 0,
       .is_input_attachment = is_input_attachment,
+      .is_dyn_ia = is_dyn_ia,
+      .is_ia_stencil = is_ia_stencil,
       .binding = binding,
       .array_index = array_index,
    };
@@ -383,7 +389,7 @@ tu5_alloc_binding_range(struct tu5_binding_ref *arr,
       bool match = true;
       for (uint32_t k = 0; k < array_size; k++) {
          if (arr[i + k].set != set || arr[i + k].binding != binding ||
-             arr[i + k].array_index != k) {
+             arr[i + k].array_index != k || arr[i + k].is_dyn_ia) {
             match = false;
             break;
          }
@@ -1335,9 +1341,84 @@ lower_input_attachment(nir_builder *b, nir_tex_instr *tex,
 
 static bool
 tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
-              struct tu_shader *shader, const struct tu_pipeline_layout *layout)
+              struct tu_shader *shader, const struct tu_pipeline_layout *layout,
+              uint32_t read_only_input_attachments, bool dynamic_renderpass)
 {
    tex->can_speculate = true;
+
+   bool is_ia = (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
+                 tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+   if (is_ia && dynamic_renderpass &&
+       !((tex->input_attachment_depth || tex->input_attachment_stencil) ?
+         (read_only_input_attachments & 0x1) :
+         (read_only_input_attachments & (1u << (tex->texture_index + 1))))) {
+      uint32_t att_slot;
+      bool is_stencil = false;
+      if (tex->input_attachment_depth) {
+         att_slot = 0;
+      } else if (tex->input_attachment_stencil) {
+         att_slot = 0;
+         is_stencil = true;
+      } else {
+         att_slot = tex->texture_index + TU_DYN_INPUT_ATT_OFFSET;
+         is_stencil = nir_alu_type_get_base_type(tex->dest_type) != nir_type_float;
+      }
+
+      int tex_deref_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+      int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      nir_def *dyn_offset = off_idx >= 0 ? tex->src[off_idx].src.ssa : NULL;
+      uint32_t array_size = 1;
+
+      if (tex_deref_idx >= 0) {
+         nir_deref_instr *deref = nir_src_as_deref(tex->src[tex_deref_idx].src);
+         if (deref->deref_type == nir_deref_type_array) {
+            if (nir_src_is_const(deref->arr.index)) {
+               att_slot += nir_src_as_uint(deref->arr.index);
+            } else {
+               nir_variable *var = nir_deref_instr_get_variable(deref);
+               unsigned set = var->data.descriptor_set;
+               unsigned binding = var->data.binding;
+               const struct tu_descriptor_set_layout *set_layout =
+                  layout->set[set].layout;
+               array_size = MAX2(set_layout->binding[binding].array_size, 1);
+               dyn_offset = deref->arr.index.ssa;
+            }
+         }
+         nir_tex_instr_remove_src(tex, tex_deref_idx);
+      } else if (dyn_offset) {
+         array_size = MAX2(tex->texture_array_size, 1);
+      }
+
+      if (dyn_offset && array_size > 1) {
+         uint32_t base = shader->tu5_bindings->num_tex;
+         for (uint32_t k = 0; k < array_size; k++) {
+            uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->tex,
+                                              &shader->tu5_bindings->num_tex,
+                                              TU5_MAX_TEX_BINDINGS, 0,
+                                              att_slot + k, 0, false,
+                                              true, true, is_stencil);
+            if (k == 0)
+               base = slot;
+            if (att_slot + k < 16)
+               shader->fs.dynamic_input_attachments_used |= 1u << (att_slot + k);
+         }
+         tex->texture_index = base;
+         off_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+         if (off_idx >= 0)
+            nir_src_rewrite(&tex->src[off_idx].src, dyn_offset);
+         else
+            nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, dyn_offset);
+      } else {
+         if (att_slot < 16)
+            shader->fs.dynamic_input_attachments_used |= 1u << att_slot;
+         tex->texture_index = tu5_alloc_binding(shader->tu5_bindings->tex,
+                                                &shader->tu5_bindings->num_tex,
+                                                TU5_MAX_TEX_BINDINGS, 0,
+                                                att_slot, 0, false,
+                                                true, true, is_stencil);
+      }
+      return true;
+   }
 
    if (nir_tex_instr_src_index(tex, nir_tex_src_texture_deref) >= 0)
       lower_tex_immutable(dev, shader, layout, b, tex);
@@ -1352,8 +1433,6 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
       const struct tu_descriptor_set_binding_layout *bind_layout =
          &set_layout->binding[binding];
       uint32_t array_size = MAX2(bind_layout->array_size, 1);
-      bool is_ia = (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
-                    tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
 
       shader->active_desc_sets |= 1u << set;
 
@@ -1447,7 +1526,8 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
           uint32_t read_only_input_attachments, bool dynamic_renderpass)
 {
    if (dev->physical_device->info->chip == 5)
-      return tu5_lower_tex(b, tex, dev, shader, layout);
+      return tu5_lower_tex(b, tex, dev, shader, layout,
+                           read_only_input_attachments, dynamic_renderpass);
 
    tex->can_speculate = true;
 

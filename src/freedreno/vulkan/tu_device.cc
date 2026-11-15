@@ -238,8 +238,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_draw_indirect_count = !is_a5xx,
       .KHR_driver_properties = true,
       .KHR_dynamic_rendering = true,
-      /* A5xx tu5 uses bindful descriptors and lacks A6xx local-read lowering */
-      .KHR_dynamic_rendering_local_read = !is_a5xx,
+      .KHR_dynamic_rendering_local_read = true,
       .KHR_external_fence = true,
       .KHR_external_fence_fd = true,
       .KHR_external_memory = true,
@@ -621,7 +620,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->computeDerivativeGroupLinear = true;
 
    /* VK_KHR_dynamic_rendering_local_read */
-   features->dynamicRenderingLocalRead = !is_a5xx;
+   features->dynamicRenderingLocalRead = true;
 
    /* VK_KHR_fragment_shading_rate */
    features->pipelineFragmentShadingRate = pdevice->info->props.has_attachment_shading_rate;

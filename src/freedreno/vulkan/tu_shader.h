@@ -71,6 +71,8 @@ struct tu5_binding_ref {
    uint8_t is_dynamic : 1;
    uint8_t has_immutable_sampler : 1;
    uint8_t is_input_attachment : 1;
+   uint8_t is_dyn_ia : 1;
+   uint8_t is_ia_stencil : 1;
    uint16_t binding;
    uint32_t array_index;
 };

@@ -358,6 +358,9 @@ struct tu_render_pass_state
     */
    bool read_only_input_attachments;
 
+   /* Track whether any FS have read a dynamic renderpass input attachment. */
+   bool dyn_input_attachments_used;
+
    uint32_t drawcall_count;
 
    /* A calculated "draw cost" value for renderpass, which tries to
