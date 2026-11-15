@@ -501,8 +501,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderSampledImageArrayDynamicIndexing = true;
    features->shaderStorageBufferArrayDynamicIndexing = true;
    features->shaderStorageImageArrayDynamicIndexing = true;
-   features->shaderClipDistance = !is_a5xx;
-   features->shaderCullDistance = !is_a5xx;
+   features->shaderClipDistance = true;
+   features->shaderCullDistance = true;
    features->shaderFloat64 = false;
    features->shaderInt64 = true;
    features->shaderInt16 = true;

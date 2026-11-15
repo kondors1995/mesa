@@ -276,6 +276,10 @@ tu5_emit_vpc(struct tu_cs *cs,
              const struct ir3_shader_variant *vs,
              const struct ir3_shader_variant *fs);
 
+uint32_t
+tu5_calc_stride_in_vpc(const struct ir3_shader_variant *vs,
+                       const struct ir3_shader_variant *fs);
+
 void
 tu_lower_nir(struct tu_device *dev,
              nir_shader *nir,

@@ -881,29 +881,6 @@ tu5_emit_depth_plane(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu_cs_emit(cs, 0);
 }
 
-static uint32_t
-tu5_calc_stride_in_vpc(const struct ir3_shader_variant *vs,
-                       const struct ir3_shader_variant *fs)
-{
-   if (!vs || !fs)
-      return 0;
-
-   struct ir3_shader_linkage linkage = {
-      .max_loc = 0,
-      .cnt = 0,
-   };
-   ir3_link_shaders(&linkage, vs, fs, true);
-
-   uint32_t pos_regid = ir3_find_output_regid(vs, VARYING_SLOT_POS);
-   uint32_t psize_regid = ir3_find_output_regid(vs, VARYING_SLOT_PSIZ);
-   if (VALIDREG(pos_regid))
-      ir3_link_add(&linkage, VARYING_SLOT_POS, pos_regid, 0xf, linkage.max_loc);
-   if (VALIDREG(psize_regid))
-      ir3_link_add(&linkage, VARYING_SLOT_PSIZ, psize_regid, 0x1, linkage.max_loc);
-
-   return linkage.max_loc;
-}
-
 void
 tu5_emit_pc_cntl(struct tu_cmd_buffer *cmd,
                  struct tu_cs *cs,

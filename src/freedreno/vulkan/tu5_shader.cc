@@ -529,6 +529,91 @@ tu5_emit_program_config(struct tu_cs *cs,
    tu_cs_emit(cs, 0x00000010);
 }
 
+struct tu5_vpc_linkage {
+   struct ir3_shader_linkage linkage;
+   uint32_t varmask[4];
+   uint32_t pos_regid;
+   uint8_t pos_loc;
+   uint8_t psize_loc;
+   uint8_t clip0_loc;
+   uint8_t clip1_loc;
+   uint8_t clip_mask;
+   uint8_t cull_mask;
+   uint8_t clip_cull_mask;
+};
+
+static void
+tu5_build_vpc_linkage(const struct ir3_shader_variant *vs,
+                      const struct ir3_shader_variant *fs,
+                      struct tu5_vpc_linkage *out)
+{
+   struct ir3_shader_variant dummy_fs = {};
+   if (!fs)
+      fs = &dummy_fs;
+
+   *out = (struct tu5_vpc_linkage){
+      .linkage = {
+         .primid_loc = 0xff,
+         .clip0_loc = 0xff,
+         .clip1_loc = 0xff,
+      },
+      .psize_loc = 0xff,
+   };
+   ir3_link_shaders(&out->linkage, vs, fs, true);
+   memcpy(out->varmask, out->linkage.varmask, sizeof(out->varmask));
+
+   out->clip_mask = vs->clip_mask;
+   out->cull_mask = vs->cull_mask;
+   out->clip_cull_mask = out->clip_mask | out->cull_mask;
+   out->clip0_loc = out->linkage.clip0_loc;
+   out->clip1_loc = out->linkage.clip1_loc;
+
+   out->pos_regid = ir3_find_output_regid(vs, VARYING_SLOT_POS);
+   uint32_t psize_regid = ir3_find_output_regid(vs, VARYING_SLOT_PSIZ);
+   uint32_t clip0_regid = ir3_find_output_regid(vs, VARYING_SLOT_CLIP_DIST0);
+   uint32_t clip1_regid = ir3_find_output_regid(vs, VARYING_SLOT_CLIP_DIST1);
+
+   out->pos_loc = out->linkage.max_loc;
+   if (VALIDREG(out->pos_regid))
+      ir3_link_add(&out->linkage, VARYING_SLOT_POS, out->pos_regid, 0xf,
+                   out->linkage.max_loc);
+
+   if (VALIDREG(psize_regid)) {
+      out->psize_loc = out->linkage.max_loc;
+      ir3_link_add(&out->linkage, VARYING_SLOT_PSIZ, psize_regid, 0x1,
+                   out->linkage.max_loc);
+   }
+
+   /* Append clip/cull distances not read by the FS, matching fd5_program. */
+   if (out->clip0_loc == 0xff && VALIDREG(clip0_regid) &&
+       (out->clip_cull_mask & 0xf) != 0) {
+      out->clip0_loc = out->linkage.max_loc;
+      ir3_link_add(&out->linkage, VARYING_SLOT_CLIP_DIST0, clip0_regid,
+                   out->clip_cull_mask & 0xf, out->linkage.max_loc);
+   }
+   if (out->clip1_loc == 0xff && VALIDREG(clip1_regid) &&
+       (out->clip_cull_mask >> 4) != 0) {
+      out->clip1_loc = out->linkage.max_loc;
+      ir3_link_add(&out->linkage, VARYING_SLOT_CLIP_DIST1, clip1_regid,
+                   out->clip_cull_mask >> 4, out->linkage.max_loc);
+   }
+
+   if (out->linkage.cnt == 0)
+      ir3_link_add(&out->linkage, 0, 0, 0x1, out->linkage.max_loc);
+}
+
+uint32_t
+tu5_calc_stride_in_vpc(const struct ir3_shader_variant *vs,
+                       const struct ir3_shader_variant *fs)
+{
+   if (!vs)
+      return 0;
+
+   struct tu5_vpc_linkage l;
+   tu5_build_vpc_linkage(vs, fs, &l);
+   return l.linkage.max_loc;
+}
+
 void
 tu5_emit_vpc(struct tu_cs *cs,
              const struct ir3_shader_variant *vs,
@@ -541,35 +626,19 @@ tu5_emit_vpc(struct tu_cs *cs,
    if (!vs)
       return;
 
-   struct ir3_shader_linkage linkage = {
-      .primid_loc = 0xff,
-      .clip0_loc = 0xff,
-      .clip1_loc = 0xff,
-   };
-   ir3_link_shaders(&linkage, vs, fs, true);
+   struct tu5_vpc_linkage l;
+   tu5_build_vpc_linkage(vs, fs, &l);
 
-   uint32_t pos_regid = ir3_find_output_regid(vs, VARYING_SLOT_POS);
-   uint32_t psize_regid = ir3_find_output_regid(vs, VARYING_SLOT_PSIZ);
-   uint8_t pos_loc = 0;
-   uint8_t psize_loc = 0xff;
+   struct ir3_shader_linkage &linkage = l.linkage;
+   uint32_t pos_regid = l.pos_regid;
+   uint8_t pos_loc = l.pos_loc;
+   uint8_t psize_loc = l.psize_loc;
 
    tu_cs_emit_pkt4(cs, REG_A5XX_VPC_VAR_DISABLE(0), 4);
-   tu_cs_emit(cs, ~linkage.varmask[0]);
-   tu_cs_emit(cs, ~linkage.varmask[1]);
-   tu_cs_emit(cs, ~linkage.varmask[2]);
-   tu_cs_emit(cs, ~linkage.varmask[3]);
-
-   pos_loc = linkage.max_loc;
-   if (VALIDREG(pos_regid))
-      ir3_link_add(&linkage, VARYING_SLOT_POS, pos_regid, 0xf, linkage.max_loc);
-
-   if (VALIDREG(psize_regid)) {
-      psize_loc = linkage.max_loc;
-      ir3_link_add(&linkage, VARYING_SLOT_PSIZ, psize_regid, 0x1, linkage.max_loc);
-   }
-
-   if (linkage.cnt == 0)
-      ir3_link_add(&linkage, 0, 0, 0x1, linkage.max_loc);
+   tu_cs_emit(cs, ~l.varmask[0]);
+   tu_cs_emit(cs, ~l.varmask[1]);
+   tu_cs_emit(cs, ~l.varmask[2]);
+   tu_cs_emit(cs, ~l.varmask[3]);
 
    for (unsigned i = 0, j = 0; i < 16 && j < linkage.cnt; i++) {
       uint32_t reg = 0;
@@ -652,14 +721,16 @@ tu5_emit_vpc(struct tu_cs *cs,
    tu_cs_emit_array(cs, vpsrepl, 8);
 
    tu_cs_emit_pkt4(cs, REG_A5XX_GRAS_VS_CL_CNTL, 1);
-   tu_cs_emit(cs, 0);
+   tu_cs_emit(cs, A5XX_GRAS_VS_CL_CNTL_CLIP_MASK(l.clip_mask) |
+                  A5XX_GRAS_VS_CL_CNTL_CULL_MASK(l.cull_mask));
 
    tu_cs_emit_pkt4(cs, REG_A5XX_VPC_CLIP_CNTL, 1);
-   tu_cs_emit(cs, A5XX_VPC_CLIP_CNTL_CLIP_DIST_03_LOC(0xff) |
-                  A5XX_VPC_CLIP_CNTL_CLIP_DIST_47_LOC(0xff));
+   tu_cs_emit(cs, A5XX_VPC_CLIP_CNTL_CLIP_MASK(l.clip_cull_mask) |
+                  A5XX_VPC_CLIP_CNTL_CLIP_DIST_03_LOC(l.clip0_loc) |
+                  A5XX_VPC_CLIP_CNTL_CLIP_DIST_47_LOC(l.clip1_loc));
 
    tu_cs_emit_pkt4(cs, REG_A5XX_PC_CLIP_CNTL, 1);
-   tu_cs_emit(cs, 0);
+   tu_cs_emit(cs, A5XX_PC_CLIP_CNTL_CLIP_MASK(l.clip_mask));
 
    if (tu_dbg_log_enabled()) {
       tu_dbg_log("A5_VPC vs=%p(in=%u,inst=%u,c=%u,clip=0x%x,cull=0x%x,pos=0x%x) fs=%p(tin=%u,inst=%u,c=%u,kill=%u) cnt=%u max=%u posloc=%u",
