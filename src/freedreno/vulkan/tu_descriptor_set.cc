@@ -475,6 +475,9 @@ blake3_update_ycbcr_sampler(blake3_hasher *ctx,
    BLAKE3_UPDATE_VALUE(ctx, sampler->ycbcr_model);
    BLAKE3_UPDATE_VALUE(ctx, sampler->ycbcr_range);
    BLAKE3_UPDATE_VALUE(ctx, sampler->format);
+   BLAKE3_UPDATE_VALUE(ctx, sampler->mapping);
+   BLAKE3_UPDATE_VALUE(ctx, sampler->chroma_offsets);
+   BLAKE3_UPDATE_VALUE(ctx, sampler->chroma_filter);
 }
 
 static void

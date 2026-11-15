@@ -552,7 +552,18 @@ tu5_emit_stage_tex_and_samp(const struct tu_cmd_buffer *cmd,
             tu5_lookup_desc(cmd, shader, descriptors_state, &b->tex[i],
                             compute, NULL);
          if (desc) {
-            tu_cs_emit_array(cs, desc, 12);
+            static const uint32_t zero_pad[6] = {};
+            if (b->tex[i].plane == 0) {
+               tu_cs_emit_array(cs, desc, 6);
+            } else if (b->tex[i].plane == 1) {
+               tu_cs_emit_array(cs, &desc[6], 6);
+            } else {
+               uint32_t p2[6] = {
+                  desc[6], desc[7], desc[12], desc[13], desc[14], desc[15],
+               };
+               tu_cs_emit_array(cs, p2, 6);
+            }
+            tu_cs_emit_array(cs, zero_pad, 6);
          } else {
             static const uint32_t zero_tex[12] = {};
             tu_cs_emit_array(cs, zero_tex, 12);

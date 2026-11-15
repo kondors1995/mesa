@@ -167,19 +167,18 @@ tu5_buffer_view_init(uint32_t *dst,
    dst[15] = (blocksize & 0xffu) | ((blocksize ? (ffs(blocksize) - 1) : 0) << 8);
 }
 
-void
-tu5_view_init(struct fdl6_view *iview,
-              const struct fdl_layout **layouts,
-              const struct fdl_view_args *args)
+static void
+tu5_fill_tex_const(uint32_t dst[6],
+                   const struct fdl_layout *layout,
+                   enum pipe_format format,
+                   const uint8_t swiz[4],
+                   const struct fdl_view_args *args,
+                   bool storage,
+                   uint32_t *out_depth,
+                   uint32_t *out_storage_depth)
 {
-   const struct fdl_layout *layout = layouts[0];
-
-   memset(iview, 0, sizeof(*iview));
-
-   enum pipe_format format = args->format;
    bool linear = !layout->tile_mode;
    struct tu5_native_format tex_fmt = tu5_format_texture(format, linear);
-   struct tu5_native_format color_fmt = tu5_format_color(format, linear);
 
    uint32_t width = u_minify(layout->width0, args->base_miplevel);
    uint32_t height = u_minify(layout->height0, args->base_miplevel);
@@ -187,32 +186,6 @@ tu5_view_init(struct fdl6_view *iview,
    uint32_t offset =
       fdl_surface_offset(layout, args->base_miplevel, args->base_array_layer);
    uint64_t base_addr = args->iova + offset;
-
-   iview->offset = offset;
-   iview->base_addr = base_addr;
-   iview->width = width;
-   iview->height = height;
-   iview->pitch = pitch;
-   iview->format = format;
-   iview->color_swap = color_fmt.valid ? color_fmt.swap : WZYX;
-   iview->layer_size = layout->layer_first
-                          ? layout->layer_size
-                          : layout->slices[args->base_miplevel].size0;
-
-   if (color_fmt.valid) {
-      enum a5xx_tile_mode tile_mode =
-         (enum a5xx_tile_mode) fdl_tile_mode(layout, args->base_miplevel);
-      iview->RB_MRT_BUF_INFO =
-         A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT((enum a5xx_color_fmt) color_fmt.fmt) |
-         A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(tile_mode) |
-         A5XX_RB_MRT_BUF_INFO_COLOR_SWAP((enum a3xx_color_swap) color_fmt.swap) |
-         COND(util_format_is_srgb(format), A5XX_RB_MRT_BUF_INFO_COLOR_SRGB);
-      iview->SP_PS_MRT_REG =
-         A5XX_SP_FS_MRT_REG_COLOR_FORMAT((enum a5xx_color_fmt) color_fmt.fmt) |
-         COND(util_format_is_pure_sint(format), A5XX_SP_FS_MRT_REG_COLOR_SINT) |
-         COND(util_format_is_pure_uint(format), A5XX_SP_FS_MRT_REG_COLOR_UINT) |
-         COND(util_format_is_srgb(format), A5XX_SP_FS_MRT_REG_COLOR_SRGB);
-   }
 
    unsigned char format_swiz[4];
    fdl6_format_swiz(format, false, format_swiz);
@@ -222,7 +195,7 @@ tu5_view_init(struct fdl6_view *iview,
       format_swiz[3] = PIPE_SWIZZLE_1;
 
    unsigned char view_swiz[4];
-   util_format_compose_swizzles(format_swiz, args->swiz, view_swiz);
+   util_format_compose_swizzles(format_swiz, swiz, view_swiz);
 
    enum a5xx_tile_mode tile_mode =
       (enum a5xx_tile_mode) fdl_tile_mode(layout, args->base_miplevel);
@@ -278,18 +251,101 @@ tu5_view_init(struct fdl6_view *iview,
    if (layout->tile_all)
       texconst3 |= A5XX_TEX_CONST_3_TILE_ALL;
 
-   iview->descriptor[0] = texconst0;
-   iview->descriptor[1] = texconst1;
-   iview->descriptor[2] = texconst2_base | A5XX_TEX_CONST_2_TYPE(tu5_tex_type(args->type, false));
-   iview->descriptor[3] = texconst3;
-   iview->descriptor[4] = (uint32_t)(base_addr & 0xffffffffu);
-   iview->descriptor[5] =
+   dst[0] = texconst0;
+   dst[1] = texconst1;
+   dst[2] = texconst2_base | A5XX_TEX_CONST_2_TYPE(tu5_tex_type(args->type, storage));
+   dst[3] = texconst3;
+   dst[4] = (uint32_t)(base_addr & 0xffffffffu);
+   dst[5] =
       A5XX_TEX_CONST_5_BASE_HI(base_addr >> 32) |
-      A5XX_TEX_CONST_5_DEPTH(depth);
+      A5XX_TEX_CONST_5_DEPTH(storage ? storage_depth : depth);
+
+   if (out_depth)
+      *out_depth = depth;
+   if (out_storage_depth)
+      *out_storage_depth = storage_depth;
+}
+
+void
+tu5_view_init(struct fdl6_view *iview,
+              const struct fdl_layout **layouts,
+              const struct fdl_view_args *args)
+{
+   const struct fdl_layout *layout = layouts[0];
+
+   memset(iview, 0, sizeof(*iview));
+
+   unsigned n_planes = util_format_get_num_planes(args->format);
+   bool multi_plane = n_planes > 1;
+   enum pipe_format format = multi_plane ? layout->format : args->format;
+   bool linear = !layout->tile_mode;
+   struct tu5_native_format color_fmt = tu5_format_color(format, linear);
+
+   uint32_t width = u_minify(layout->width0, args->base_miplevel);
+   uint32_t height = u_minify(layout->height0, args->base_miplevel);
+   uint32_t pitch = fdl_pitch(layout, args->base_miplevel);
+   uint32_t offset =
+      fdl_surface_offset(layout, args->base_miplevel, args->base_array_layer);
+   uint64_t base_addr = args->iova + offset;
+
+   iview->offset = offset;
+   iview->base_addr = base_addr;
+   iview->width = width;
+   iview->height = height;
+   iview->pitch = pitch;
+   iview->format = args->format;
+   iview->color_swap = color_fmt.valid ? color_fmt.swap : WZYX;
+   iview->layer_size = layout->layer_first
+                          ? layout->layer_size
+                          : layout->slices[args->base_miplevel].size0;
+
+   if (color_fmt.valid) {
+      enum a5xx_tile_mode tile_mode =
+         (enum a5xx_tile_mode) fdl_tile_mode(layout, args->base_miplevel);
+      iview->RB_MRT_BUF_INFO =
+         A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT((enum a5xx_color_fmt) color_fmt.fmt) |
+         A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(tile_mode) |
+         A5XX_RB_MRT_BUF_INFO_COLOR_SWAP((enum a3xx_color_swap) color_fmt.swap) |
+         COND(util_format_is_srgb(format), A5XX_RB_MRT_BUF_INFO_COLOR_SRGB);
+      iview->SP_PS_MRT_REG =
+         A5XX_SP_FS_MRT_REG_COLOR_FORMAT((enum a5xx_color_fmt) color_fmt.fmt) |
+         COND(util_format_is_pure_sint(format), A5XX_SP_FS_MRT_REG_COLOR_SINT) |
+         COND(util_format_is_pure_uint(format), A5XX_SP_FS_MRT_REG_COLOR_UINT) |
+         COND(util_format_is_srgb(format), A5XX_SP_FS_MRT_REG_COLOR_SRGB);
+   }
+
+   static const uint8_t id_swiz[4] = {
+      PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y, PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W,
+   };
+   const uint8_t *plane_swiz = multi_plane ? id_swiz : args->swiz;
+
+   uint32_t storage_depth = 1;
+   tu5_fill_tex_const(iview->descriptor, layouts[0], format, plane_swiz,
+                      args, false, NULL, &storage_depth);
+
+   /* Pack multi-plane YCbCr descriptors into the unused dwords [6..15]:
+    * [6..11] = plane 1 TEX_CONST_0..5, and for 3-plane formats [12..15] store
+    * plane 2's TEX_CONST_2..5 (sharing plane 1's TEX_CONST_0..1).
+    */
+   if (multi_plane) {
+      tu5_fill_tex_const(&iview->descriptor[6], layouts[1], layouts[1]->format,
+                         id_swiz, args, false, NULL, NULL);
+      if (n_planes > 2) {
+         uint32_t p2[6];
+         tu5_fill_tex_const(p2, layouts[2], layouts[2]->format, id_swiz, args,
+                            false, NULL, NULL);
+         assert(p2[0] == iview->descriptor[6] && p2[1] == iview->descriptor[7]);
+         iview->descriptor[12] = p2[2];
+         iview->descriptor[13] = p2[3];
+         iview->descriptor[14] = p2[4];
+         iview->descriptor[15] = p2[5];
+      }
+   }
 
    memcpy(iview->storage_descriptor, iview->descriptor, sizeof(iview->descriptor));
    iview->storage_descriptor[2] =
-      texconst2_base | A5XX_TEX_CONST_2_TYPE(tu5_tex_type(args->type, true));
+      (iview->descriptor[2] & ~A5XX_TEX_CONST_2_TYPE__MASK) |
+      A5XX_TEX_CONST_2_TYPE(tu5_tex_type(args->type, true));
    iview->storage_descriptor[5] =
       A5XX_TEX_CONST_5_BASE_HI(base_addr >> 32) |
       A5XX_TEX_CONST_5_DEPTH(storage_depth);

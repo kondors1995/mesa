@@ -283,7 +283,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_relaxed_block_layout = true,
       .KHR_robustness2 = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
-      .KHR_sampler_ycbcr_conversion = !is_a5xx,
+      .KHR_sampler_ycbcr_conversion = true,
       .KHR_separate_depth_stencil_layouts = true,
       .KHR_shader_atomic_int64 = device->info->props.has_64b_ssbo_atomics,
       /* ir3_nir_lower_shader_clock uses load_global_offset */
@@ -532,7 +532,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->variablePointersStorageBuffer       = true;
    features->variablePointers                    = true;
    features->protectedMemory                     = false;
-   features->samplerYcbcrConversion              = !is_a5xx;
+   features->samplerYcbcrConversion              = true;
    features->shaderDrawParameters                = true;
 
    /* Vulkan 1.2 */

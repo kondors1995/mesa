@@ -36,6 +36,7 @@ struct tu5_format {
 static const struct tu5_format formats[PIPE_FORMAT_COUNT] = {
    /* 8-bit */
    VT(R8_UNORM,   8_UNORM, R8_UNORM, WZYX),
+   VT(Y8_UNORM,   8_UNORM, R8_UNORM, WZYX),
    _T(R8_SRGB,    8_UNORM, R8_UNORM, WZYX),
    VT(R8_SNORM,   8_SNORM, R8_SNORM, WZYX),
    VT(R8_UINT,    8_UINT,  R8_UINT,  WZYX),
@@ -269,9 +270,29 @@ tu5_format_vtx_supported(enum pipe_format format)
           formats[format].vtx != VFMT5_NONE;
 }
 
+static bool
+tu5_format_is_ycbcr_multiplane(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_G8_B8R8_420_UNORM:
+   case PIPE_FORMAT_G8_B8_R8_420_UNORM:
+   case PIPE_FORMAT_Y8_U8_V8_422_UNORM:
+   case PIPE_FORMAT_Y8_U8V8_422_UNORM:
+   case PIPE_FORMAT_G8_B8R8_422_UNORM:
+   case PIPE_FORMAT_Y8_U8_V8_444_UNORM:
+   case PIPE_FORMAT_G8_B8R8_444_UNORM:
+      return true;
+   default:
+      return false;
+   }
+}
+
 bool
 tu5_format_tex_supported(enum pipe_format format)
 {
+   if (tu5_format_is_ycbcr_multiplane(format))
+      return true;
+
    return format < PIPE_FORMAT_COUNT && formats[format].present &&
           formats[format].tex != TFMT5_NONE;
 }
@@ -307,6 +328,9 @@ tu5_format_color(enum pipe_format format, bool linear)
 struct tu5_native_format
 tu5_format_texture(enum pipe_format format, bool linear)
 {
+   if (tu5_format_is_ycbcr_multiplane(format))
+      return { TFMT5_8_UNORM, WZYX, true };
+
    if (!tu5_format_tex_supported(format))
       return { TFMT5_NONE, WZYX, false };
    /* TPL1 respects SWAP even when tiled, whereas RB writes tiled images as

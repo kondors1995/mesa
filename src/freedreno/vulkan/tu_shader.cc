@@ -343,13 +343,15 @@ tu5_alloc_binding(struct tu5_binding_ref *arr,
                   bool is_dynamic,
                   bool is_input_attachment,
                   bool is_dyn_ia = false,
-                  bool is_ia_stencil = false)
+                  bool is_ia_stencil = false,
+                  uint8_t plane = 0)
 {
    for (uint8_t i = 0; i < *count; i++) {
       if (arr[i].set == set && arr[i].binding == binding &&
           arr[i].array_index == array_index &&
           arr[i].is_dyn_ia == is_dyn_ia &&
-          arr[i].is_ia_stencil == is_ia_stencil)
+          arr[i].is_ia_stencil == is_ia_stencil &&
+          arr[i].plane == plane)
          return i;
    }
 
@@ -365,6 +367,7 @@ tu5_alloc_binding(struct tu5_binding_ref *arr,
       .is_input_attachment = is_input_attachment,
       .is_dyn_ia = is_dyn_ia,
       .is_ia_stencil = is_ia_stencil,
+      .plane = plane,
       .binding = binding,
       .array_index = array_index,
    };
@@ -379,17 +382,20 @@ tu5_alloc_binding_range(struct tu5_binding_ref *arr,
                         uint16_t binding,
                         uint32_t array_size,
                         bool is_dynamic,
-                        bool is_input_attachment)
+                        bool is_input_attachment,
+                        uint8_t plane = 0)
 {
    if (array_size <= 1)
       return tu5_alloc_binding(arr, count, max_count, set, binding, 0,
-                               is_dynamic, is_input_attachment);
+                               is_dynamic, is_input_attachment,
+                               false, false, plane);
 
    for (uint8_t i = 0; i + array_size <= *count; i++) {
       bool match = true;
       for (uint32_t k = 0; k < array_size; k++) {
          if (arr[i + k].set != set || arr[i + k].binding != binding ||
-             arr[i + k].array_index != k || arr[i + k].is_dyn_ia) {
+             arr[i + k].array_index != k || arr[i + k].is_dyn_ia ||
+             arr[i + k].plane != plane) {
             match = false;
             break;
          }
@@ -409,6 +415,7 @@ tu5_alloc_binding_range(struct tu5_binding_ref *arr,
          .is_dynamic = is_dynamic,
          .has_immutable_sampler = 0,
          .is_input_attachment = is_input_attachment,
+         .plane = plane,
          .binding = binding,
          .array_index = k,
       };
@@ -1170,11 +1177,13 @@ lower_tex_immutable(struct tu_device *dev,
       array_index = MIN2(array_index, binding->array_size - 1);
    }
 
-   const struct vk_ycbcr_conversion_state *ycbcr_samplers =
-      tu_immutable_ycbcr_samplers(set_layout, binding);
-   if (ycbcr_samplers) {
-      const struct vk_ycbcr_conversion_state *ycbcr_sampler = ycbcr_samplers + array_index;
-      lower_tex_ycbcr(ycbcr_sampler, builder, tex);
+   if (dev->physical_device->info->chip != 5) {
+      const struct vk_ycbcr_conversion_state *ycbcr_samplers =
+         tu_immutable_ycbcr_samplers(set_layout, binding);
+      if (ycbcr_samplers) {
+         const struct vk_ycbcr_conversion_state *ycbcr_sampler = ycbcr_samplers + array_index;
+         lower_tex_ycbcr(ycbcr_sampler, builder, tex);
+      }
    }
 
    const struct tu_sampler *samplers =
@@ -1420,6 +1429,13 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
       return true;
    }
 
+   uint8_t plane = 0;
+   int plane_idx = nir_tex_instr_src_index(tex, nir_tex_src_plane);
+   if (plane_idx >= 0) {
+      plane = MIN2(nir_src_as_uint(tex->src[plane_idx].src), 2);
+      nir_tex_instr_remove_src(tex, plane_idx);
+   }
+
    if (nir_tex_instr_src_index(tex, nir_tex_src_texture_deref) >= 0)
       lower_tex_immutable(dev, shader, layout, b, tex);
 
@@ -1444,13 +1460,14 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
          uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->tex,
                                            &shader->tu5_bindings->num_tex,
                                            TU5_MAX_TEX_BINDINGS, set, binding,
-                                           arr_idx, false, is_ia);
+                                           arr_idx, false, is_ia,
+                                           false, false, plane);
          tex->texture_index = slot;
       } else {
          uint32_t base = tu5_alloc_binding_range(shader->tu5_bindings->tex,
                                                  &shader->tu5_bindings->num_tex,
                                                  TU5_MAX_TEX_BINDINGS, set, binding,
-                                                 array_size, false, is_ia);
+                                                 array_size, false, is_ia, plane);
          tex->texture_index = base;
          int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
          if (off_idx >= 0)
@@ -1857,6 +1874,38 @@ shader_uses_push_consts(nir_shader *shader)
    return false;
 }
 
+static const struct vk_ycbcr_conversion_state *
+tu5_lookup_ycbcr_conversion(const void *data,
+                            uint32_t set,
+                            uint32_t binding,
+                            uint32_t array_index)
+{
+   const struct tu_pipeline_layout *layout =
+      static_cast<const struct tu_pipeline_layout *>(data);
+   if (set >= layout->num_sets || !layout->set[set].layout)
+      return NULL;
+
+   const struct tu_descriptor_set_layout *set_layout = layout->set[set].layout;
+   if (binding >= set_layout->binding_count)
+      return NULL;
+
+   const struct tu_descriptor_set_binding_layout *binding_layout =
+      &set_layout->binding[binding];
+   const struct vk_ycbcr_conversion_state *ycbcr_samplers =
+      tu_immutable_ycbcr_samplers(set_layout, binding_layout);
+   if (!ycbcr_samplers)
+      return NULL;
+
+   uint32_t array_size = MAX2(binding_layout->array_size, 1);
+   const struct vk_ycbcr_conversion_state *state =
+      ycbcr_samplers + MIN2(array_index, array_size - 1);
+   if (state->format == VK_FORMAT_UNDEFINED ||
+       !vk_format_get_ycbcr_info(state->format))
+      return NULL;
+
+   return state;
+}
+
 static bool
 tu_lower_io(nir_shader *shader, struct tu_device *dev,
             struct tu_shader *tu_shader,
@@ -2039,6 +2088,11 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
       progress |= nir_shader_intrinsics_pass(shader, lower_inline_ubo,
                                                nir_metadata_none,
                                                &params);
+   }
+
+   if (dev->physical_device->info->chip == 5) {
+      progress |= nir_vk_lower_ycbcr_tex(shader, tu5_lookup_ycbcr_conversion,
+                                         layout);
    }
 
    progress |= nir_shader_instructions_pass(shader,
