@@ -1135,6 +1135,13 @@ tu5_emit_window_scissor(struct tu_cs *cs,
                         uint32_t y2);
 
 void
+tu5_emit_resolve_scissor(struct tu_cs *cs,
+                         uint32_t x1,
+                         uint32_t y1,
+                         uint32_t x2,
+                         uint32_t y2);
+
+void
 tu5_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1);
 
 /* For bin offsetting we want to do "Euclidean division," where the remainder

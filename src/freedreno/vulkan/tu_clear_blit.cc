@@ -5250,6 +5250,9 @@ tu_clear_attachments(struct tu_cmd_buffer *cmd,
       }
    }
 
+   /* A5xx uses the 3D RECTLIST clear path in both GMEM and sysmem without
+    * overwriting RB_MRT_BASE/RB_DEPTH_BUFFER_BASE/RB_CNTL/RB_RESOLVE_CNTL_*.
+    */
    if constexpr (CHIP == A5XX) {
       tu_clear_sysmem_attachments<CHIP>(cmd, attachmentCount, pAttachments, rectCount, pRects);
       return;
@@ -5560,6 +5563,11 @@ tu_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
 
    if (!attachment->clear_mask)
       return;
+
+   if constexpr (CHIP == A5XX) {
+      tu5_clear_gmem_attachment(cmd, cs, per_layer_render_area, a);
+      return;
+   }
 
    tu_emit_clear_gmem_attachment<CHIP>(cmd, cs, resolve_group, a, 0,
                                  cmd->state.framebuffer->layers,
@@ -6032,6 +6040,11 @@ tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
    if (!load_common && !load_stencil)
       return;
 
+   if constexpr (CHIP == A5XX) {
+      tu5_load_gmem_attachment(cmd, cs, a, gmem_a, force_load);
+      return;
+   }
+
    trace_start_gmem_load(&cmd->rp_trace, cs, cmd, attachment->format, force_load);
 
    /* If attachment will be cleared by vkCmdClearAttachments - it is likely
@@ -6475,6 +6488,12 @@ tu_store_gmem_attachment(struct tu_cmd_buffer *cmd,
 
    if (!dst->store && !dst->store_stencil)
       return;
+
+   if constexpr (CHIP == A5XX) {
+      tu5_store_gmem_attachment(cmd, cs, a, gmem_a, layers, layer_mask,
+                                per_layer_render_area);
+      return;
+   }
 
    bool unaligned = tu_attachment_store_unaligned(cmd, a);
    bool mismatched_mutability =

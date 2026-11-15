@@ -1489,6 +1489,20 @@ tu5_emit_window_scissor(struct tu_cs *cs,
 }
 
 void
+tu5_emit_resolve_scissor(struct tu_cs *cs,
+                         uint32_t x1,
+                         uint32_t y1,
+                         uint32_t x2,
+                         uint32_t y2)
+{
+   tu_cs_emit_pkt4(cs, REG_A5XX_RB_RESOLVE_CNTL_1, 2);
+   tu_cs_emit(cs, A5XX_RB_RESOLVE_CNTL_1_X(x1) |
+                  A5XX_RB_RESOLVE_CNTL_1_Y(y1));
+   tu_cs_emit(cs, A5XX_RB_RESOLVE_CNTL_2_X(x2) |
+                  A5XX_RB_RESOLVE_CNTL_2_Y(y2));
+}
+
+void
 tu5_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1)
 {
    tu_cs_emit_pkt4(cs, REG_A5XX_RB_WINDOW_OFFSET, 1);

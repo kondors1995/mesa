@@ -1206,6 +1206,9 @@ tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
                       unsigned view, bool align)
 {
    struct tu_physical_device *phys_dev = cmd->device->physical_device;
+   if (phys_dev->info->chip == 5)
+      return;
+
    const VkRect2D *render_area = &cmd->state.render_areas[view];
 
    /* Avoid assertion fails with an empty render area at (0, 0) where the
@@ -1491,6 +1494,12 @@ tu_vsc_config(struct tu_cmd_buffer *cmd, const struct tu_tiling_config *tiling)
 static bool
 use_hw_binning(struct tu_cmd_buffer *cmd)
 {
+   /* A5xx uses non-binning GMEM passes (no A5xx binning-state masks in
+    * CP_SET_DRAW_STATE, so HW binning would execute/fetch FS state).
+    */
+   if (cmd->device->physical_device->info->chip == 5)
+      return false;
+
    struct tu_framebuffer *fb = cmd->state.framebuffer;
    const struct tu_tiling_config *tiling =
       tu_framebuffer_get_tiling_config(fb, cmd->device, cmd->state.pass, cmd->state.gmem_layout, cmd->state.gmem_layout_divisor);
@@ -1532,8 +1541,20 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
    }
 
    if (cmd->device->physical_device->info->chip == 5) {
-      cmd->state.rp.force_render_mode_reason = "A5XX sysmem only";
-      return true;
+      if (cmd->state.gmem_layout == TU_GMEM_LAYOUT_AVOID_CCU) {
+         cmd->state.rp.force_render_mode_reason = "A5XX GMEM layout incompatible";
+         return true;
+      }
+
+      const struct tu_render_pass *pass = cmd->state.pass;
+      for (uint32_t i = 0; i < pass->subpass_count; i++) {
+         if (pass->subpasses[i].input_count > 0 ||
+             pass->subpasses[i].multiview_mask != 0) {
+            cmd->state.rp.force_render_mode_reason =
+               "A5XX GMEM does not support input attachments or multiview";
+            return true;
+         }
+      }
    }
 
    /* can't fit attachments into gmem */
@@ -1593,7 +1614,13 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
    }
 
    /* This is a case where it's better to avoid GMEM, too many tiles but no HW binning possible. */
-   if (!vsc->binning_possible && vsc->binning_useful) {
+   if (cmd->device->physical_device->info->chip == 5) {
+      if (vsc->tile_count.width * vsc->tile_count.height > 16) {
+         cmd->state.rp.force_render_mode_reason =
+            "Too many tiles for A5XX non-binning GMEM";
+         return true;
+      }
+   } else if (!vsc->binning_possible && vsc->binning_useful) {
       cmd->state.rp.force_render_mode_reason =
          "Too many tiles and HW binning is not possible";
       return true;
@@ -1617,7 +1644,7 @@ tu6_emit_cond_for_load_stores(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 {
    const struct tu_vsc_config *vsc = tu_vsc_config(cmd, cmd->state.tiling);
 
-   if (vsc->binning_possible &&
+   if (CHIP >= A6XX && vsc->binning_possible &&
        cmd->state.pass->has_cond_load_store) {
       if (CHIP >= A7XX) {
          tu_cs_emit_pkt7(cs, CP_REG_TEST, 1);
@@ -1767,8 +1794,9 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
 
    tu6_emit_bin_size_gmem<CHIP>(cmd, cs, tile->gmem_extent, BUFFERS_IN_GMEM, disable_lrz);
 
-   tu_cs_emit_regs(cs,
-                   A6XX_VFD_RENDER_MODE(RENDERING_PASS));
+   if constexpr (CHIP >= A6XX)
+      tu_cs_emit_regs(cs,
+                      A6XX_VFD_RENDER_MODE(RENDERING_PASS));
 
    const uint32_t x1 = tiling->tile0.width * tile->pos.x;
    const uint32_t y1 = tiling->tile0.height * tile->pos.y;
@@ -1794,6 +1822,25 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
       tu6_emit_window_scissor<CHIP>(cs, x1, y1, x2 - 1, y2 - 1);
    }
    tu6_emit_window_offset<CHIP>(cs, x1, y1);
+
+   if constexpr (CHIP == A5XX) {
+      uint32_t rx1 = x1;
+      uint32_t ry1 = y1;
+      uint32_t rx2 = MIN2(x2, fb->width);
+      uint32_t ry2 = MIN2(y2, fb->height);
+      if (!cmd->state.per_layer_render_area) {
+         const VkRect2D *ra = &cmd->state.render_areas[0];
+         rx1 = MAX2(rx1, static_cast<uint32_t>(ra->offset.x));
+         ry1 = MAX2(ry1, static_cast<uint32_t>(ra->offset.y));
+         rx2 = MIN2(rx2, static_cast<uint32_t>(ra->offset.x + ra->extent.width));
+         ry2 = MIN2(ry2, static_cast<uint32_t>(ra->offset.y + ra->extent.height));
+      }
+      if (rx2 > rx1 && ry2 > ry1) {
+         tu5_emit_resolve_scissor(cs, rx1, ry1, rx2 - 1, ry2 - 1);
+      } else {
+         tu5_emit_resolve_scissor(cs, 1, 1, 0, 0);
+      }
+   }
 
    unsigned slot = ffs(tile->slot_mask) - 1;
 
@@ -1824,8 +1871,10 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
    tu_cs_emit_pkt7(cs, CP_SET_VISIBILITY_OVERRIDE, 1);
    tu_cs_emit(cs, !hw_binning);
 
-   tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
-   tu_cs_emit(cs, 0x0);
+   if constexpr (CHIP >= A6XX) {
+      tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
+      tu_cs_emit(cs, 0x0);
+   }
 
    if (cmd->fdm_bin_patchpoints.size != 0) {
       VkRect2D bin = {
@@ -3508,6 +3557,17 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    if constexpr (CHIP >= A6XX) {
       tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
       tu_cs_emit(cs, 0x0);
+   } else {
+      tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+      tu_cs_emit_qw(cs, global_iova(cmd, a5xx_gmem_mode));
+      tu_cs_emit(cs, 0);
+
+      tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+      tu_cs_emit_qw(cs, global_iova(cmd, a5xx_sysmem_mode));
+      tu_cs_emit(cs, 1);
+
+      tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+      tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
    }
 
    /* Reset bin scaling. */
@@ -3759,7 +3819,20 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
       tu_cs_emit_regs(cs, RB_BIN_FOVEAT(CHIP));
    }
 
-   if (!cmd->vsc_initialized) {
+   if constexpr (CHIP == A5XX) {
+      tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+      tu_cs_emit_qw(cs, global_iova(cmd, a5xx_gmem_mode));
+      tu_cs_emit(cs, 1);
+
+      tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+      tu_cs_emit_qw(cs, global_iova(cmd, a5xx_sysmem_mode));
+      tu_cs_emit(cs, 0);
+
+      tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+      tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+   }
+
+   if (CHIP >= A6XX && !cmd->vsc_initialized) {
       tu6_lazy_init_vsc(cmd);
    }
 
@@ -3814,7 +3887,7 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
          tu_cs_emit(cs, 0x1);
       }
    } else {
-      if (vsc->binning_possible) {
+      if (CHIP >= A6XX && vsc->binning_possible) {
          /* Mark all tiles as visible for tu6_emit_cond_for_load_stores(), since
           * the actual binner didn't run.
           */
@@ -3825,7 +3898,7 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
       }
    }
 
-   if (vsc->binning_possible) {
+   if (CHIP >= A6XX && vsc->binning_possible) {
       /* Upload state regs to memory to be restored on skipsaverestore
        * preemption. On a7xx this is considered part of the vis stream that
        * requires a patchpoint.
@@ -6999,8 +7072,8 @@ tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd, struct tu_resolve_group *r
    const struct tu_vsc_config *vsc = tu_vsc_config(cmd, cmd->state.tiling);
    bool per_layer_render_area = cmd->state.per_layer_render_area;
 
-   /* Shader resolve subpasses don't use GMEM; A5XX always renders in sysmem */
-   if (CHIP == A5XX || subpass->custom_resolve)
+   /* Shader resolve subpasses don't use GMEM. */
+   if (subpass->custom_resolve || (CHIP == A5XX && !cmd->state.tiling->possible))
       return;
 
    /* If we might choose to bin, then put the loads under a check for geometry
@@ -7011,14 +7084,19 @@ tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd, struct tu_resolve_group *r
     * (perf queries), then we can't do this optimization since the
     * start-of-the-CS geometry condition will have been overwritten.
     */
-   bool cond_load_allowed = vsc->binning_possible &&
+   bool cond_load_allowed = CHIP >= A6XX &&
+                            vsc->binning_possible &&
                             cmd->state.pass->has_cond_load_store &&
                             !cmd->state.rp.draw_cs_writes_to_cond_pred;
 
    if (cmd->state.pass->has_fdm)
       tu_cs_set_writeable(cs, true);
 
-   tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
+   if constexpr (CHIP == A5XX) {
+      tu5_cond_exec_start(cs, global_iova(cmd, a5xx_gmem_mode));
+   } else {
+      tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
+   }
 
    /* This appears to be necessary when stores are followed by loads to the
     * same memory in GMEM, to prevent the loads from starting before the
@@ -7087,7 +7165,11 @@ tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd, struct tu_resolve_group *r
       }
    }
 
-   tu_cond_exec_end(cs); /* CP_COND_EXEC_0_RENDER_MODE_GMEM */
+   if constexpr (CHIP == A5XX) {
+      tu5_cond_exec_end(cs); /* a5xx_gmem_mode */
+   } else {
+      tu_cond_exec_end(cs); /* CP_COND_EXEC_0_RENDER_MODE_GMEM */
+   }
 
    if (cmd->state.pass->has_fdm)
       tu_cs_set_writeable(cs, false);
@@ -7106,10 +7188,17 @@ tu_emit_subpass_begin_sysmem(struct tu_cmd_buffer *cmd)
    struct tu_cs *cs = &cmd->draw_cs;
    const struct tu_subpass *subpass = cmd->state.subpass;
    uint32_t subpass_idx = subpass - cmd->state.pass->subpasses;
-   bool emit_cond_exec = CHIP != A5XX && !subpass->custom_resolve;
+   bool emit_cond_exec =
+      !subpass->custom_resolve &&
+      (CHIP != A5XX || cmd->state.tiling->possible);
 
-   if (emit_cond_exec)
-      tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+   if (emit_cond_exec) {
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_start(cs, global_iova(cmd, a5xx_sysmem_mode));
+      } else {
+         tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+      }
+   }
 
    tu6_emit_sysmem_unresolves<CHIP>(cmd, cs, cmd->state.subpass);
 
@@ -7119,8 +7208,13 @@ tu_emit_subpass_begin_sysmem(struct tu_cmd_buffer *cmd)
          tu_clear_sysmem_attachment<CHIP>(cmd, cs, i);
    }
 
-   if (emit_cond_exec)
-      tu_cond_exec_end(cs); /* sysmem */
+   if (emit_cond_exec) {
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_end(cs); /* a5xx_sysmem_mode */
+      } else {
+         tu_cond_exec_end(cs); /* sysmem */
+      }
+   }
 }
 
 static void
@@ -7311,9 +7405,35 @@ tu_emit_subpass_begin(struct tu_cmd_buffer *cmd)
 
    tu_emit_resolve_group<CHIP>(cmd, &cmd->draw_cs, &resolve_group);
 
-   tu6_emit_zs<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs);
-   tu6_emit_mrt<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs);
-   tu6_emit_render_cntl<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+   if constexpr (CHIP == A5XX) {
+      if (cmd->state.tiling->possible) {
+         tu5_cond_exec_start(&cmd->draw_cs, global_iova(cmd, a5xx_gmem_mode));
+         tu5_emit_zs(cmd, cmd->state.subpass, &cmd->draw_cs, true);
+         tu5_emit_mrt(cmd, cmd->state.subpass, &cmd->draw_cs, true);
+         tu5_emit_bin_size(&cmd->draw_cs,
+                           cmd->state.tiling->tile0.width,
+                           cmd->state.tiling->tile0.height, false);
+         tu5_emit_msaa(&cmd->draw_cs, cmd->state.subpass->samples, false);
+         tu5_emit_render_cntl(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_cond_exec_end(&cmd->draw_cs);
+
+         tu5_cond_exec_start(&cmd->draw_cs, global_iova(cmd, a5xx_sysmem_mode));
+         tu5_emit_zs(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_emit_mrt(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_emit_bin_size(&cmd->draw_cs, 0, 0, true);
+         tu5_emit_msaa(&cmd->draw_cs, cmd->state.subpass->samples, false);
+         tu5_emit_render_cntl(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_cond_exec_end(&cmd->draw_cs);
+      } else {
+         tu5_emit_zs(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_emit_mrt(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+         tu5_emit_render_cntl(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+      }
+   } else {
+      tu6_emit_zs<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs);
+      tu6_emit_mrt<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs);
+      tu6_emit_render_cntl<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs, false);
+   }
 
    if (CHIP >= A7XX) {
       tu7_emit_subpass_shading_rate<CHIP>(cmd, cmd->state.subpass, &cmd->draw_cs);
@@ -7900,12 +8020,16 @@ tu_emit_subpass_stores(struct tu_cmd_buffer *cmd,
 {
    struct tu_cs *cs = &cmd->draw_cs;
 
-   bool gmem_possible = CHIP != A5XX && cmd->state.tiling->possible;
+   bool gmem_possible = cmd->state.tiling->possible;
    if (gmem_possible) {
       if (cmd->state.pass->has_fdm)
          tu_cs_set_writeable(cs, true);
 
-      tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_start(cs, global_iova(cmd, a5xx_gmem_mode));
+      } else {
+         tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
+      }
 
       struct tu_resolve_group resolve_group = {};
 
@@ -7913,18 +8037,31 @@ tu_emit_subpass_stores(struct tu_cmd_buffer *cmd,
 
       tu_emit_resolve_group<CHIP>(cmd, cs, &resolve_group);
 
-      tu_cond_exec_end(cs);
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_end(cs);
+      } else {
+         tu_cond_exec_end(cs);
+      }
 
       if (cmd->state.pass->has_fdm)
          tu_cs_set_writeable(cs, false);
 
-      tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_start(cs, global_iova(cmd, a5xx_sysmem_mode));
+      } else {
+         tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+      }
    }
 
    tu6_emit_sysmem_resolves<CHIP>(cmd, cs, subpass);
 
-   if (gmem_possible)
-      tu_cond_exec_end(cs);
+   if (gmem_possible) {
+      if constexpr (CHIP == A5XX) {
+         tu5_cond_exec_end(cs);
+      } else {
+         tu_cond_exec_end(cs);
+      }
+   }
 }
 
 template <chip CHIP>
