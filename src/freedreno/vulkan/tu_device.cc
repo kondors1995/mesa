@@ -301,7 +301,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_extended_types = true,
       .KHR_shader_subgroup_rotate = !is_a5xx,
-      .KHR_shader_subgroup_uniform_control_flow = !is_a5xx,
+      .KHR_shader_subgroup_uniform_control_flow = true,
       .KHR_shader_terminate_invocation = true,
       .KHR_spirv_1_4 = true,
       .KHR_storage_buffer_storage_class = true,
@@ -688,7 +688,7 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderQuadControl = pdevice->info->props.has_getfiberid;
 
    /* VK_KHR_shader_subgroup_uniform_control_flow */
-   features->shaderSubgroupUniformControlFlow = !is_a5xx;
+   features->shaderSubgroupUniformControlFlow = true;
 
    /* VK_KHR_vertex_attribute_divisor */
    features->vertexAttributeInstanceRateDivisor = true;
