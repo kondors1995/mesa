@@ -463,7 +463,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->fullDrawIndexUint32 = true;
    features->imageCubeArray = true;
    features->independentBlend = true;
-   features->geometryShader = !is_a5xx && !pdevice->info->props.is_a702;
+   /* Expose geometryShader on A5xx so DXVK/Proton (D3D9/D3D11) can pass
+    * vkCreateDevice; note tu5_shader.cc does not emit GS state yet. */
+   features->geometryShader = !pdevice->info->props.is_a702;
    features->tessellationShader = !is_a5xx && !pdevice->info->props.is_a702;
    features->sampleRateShading = true;
    features->dualSrcBlend = true;
