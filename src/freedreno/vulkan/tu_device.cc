@@ -551,8 +551,8 @@ tu_get_features(struct tu_physical_device *pdevice,
 
    features->descriptorIndexing                                 = !is_a5xx;
    features->shaderInputAttachmentArrayDynamicIndexing          = false;
-   features->shaderUniformTexelBufferArrayDynamicIndexing       = !is_a5xx;
-   features->shaderStorageTexelBufferArrayDynamicIndexing       = !is_a5xx;
+   features->shaderUniformTexelBufferArrayDynamicIndexing       = true;
+   features->shaderStorageTexelBufferArrayDynamicIndexing       = true;
    features->shaderUniformBufferArrayNonUniformIndexing         = !is_a5xx;
    features->shaderSampledImageArrayNonUniformIndexing          = !is_a5xx;
    features->shaderStorageBufferArrayNonUniformIndexing         = !is_a5xx;
