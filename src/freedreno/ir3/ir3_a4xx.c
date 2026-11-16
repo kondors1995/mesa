@@ -420,9 +420,30 @@ a5xx_global_addr(struct ir3_context *ctx, nir_intrinsic_instr *intr,
                  struct ir3_instruction **out_hi, int32_t *out_imm)
 {
    struct ir3_builder *b = &ctx->build;
-   struct ir3_instruction *const *base = ir3_get_src(ctx, &intr->src[addr_src_idx]);
-   struct ir3_instruction *lo = base[0];
-   struct ir3_instruction *hi = ctx->compiler->is_64bit ? base[1] : NULL;
+   nir_src *addr_src = &intr->src[addr_src_idx];
+   struct ir3_instruction *const *base = ir3_get_src(ctx, addr_src);
+   struct ir3_instruction *lo;
+   struct ir3_instruction *hi = NULL;
+
+   if (ctx->compiler->is_64bit) {
+      if (nir_src_bit_size(*addr_src) == 64) {
+         if (base[0]->opc == OPC_META_COLLECT && base[0]->srcs_count == 2) {
+            lo = ir3_64b_get_lo(base[0]);
+            hi = ir3_64b_get_hi(base[0]);
+         } else {
+            struct ir3_instruction *comps[2];
+            ir3_split_dest(b, comps, base[0], 0, 2);
+            lo = comps[0];
+            hi = comps[1];
+         }
+      } else {
+         lo = base[0];
+         hi = nir_src_num_components(*addr_src) >= 2 ? base[1] :
+                                                       create_immed(b, 0);
+      }
+   } else {
+      lo = base[0];
+   }
    int64_t const_off = 0;
 
    if (off_src_idx >= 0) {
