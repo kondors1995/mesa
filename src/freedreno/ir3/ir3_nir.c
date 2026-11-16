@@ -1197,8 +1197,21 @@ ir3_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
                  uint32_t align_offset, bool offset_is_const,
                  enum gl_access_qualifier access, const void *cb_data)
 {
+   const struct ir3_compiler *compiler = cb_data;
    align = nir_combined_align(align, align_offset);
    assert(util_is_power_of_two_nonzero(align));
+
+   if (compiler && compiler->gen < 6 &&
+       (intrin == nir_intrinsic_load_ssbo || intrin == nir_intrinsic_store_ssbo)) {
+      unsigned num_components =
+         (align >= 4 && bytes >= 4) ? MIN2(bytes / 4, 4) : 1;
+      return (nir_mem_access_size_align){
+         .num_components = num_components,
+         .bit_size = 32,
+         .align = 4,
+         .shift = nir_mem_access_shift_method_scalar,
+      };
+   }
 
    /* But if we're only aligned to 1 byte, use 8-bit loads. If we're only
     * aligned to 2 bytes, use 16-bit loads, unless we needed 8-bit loads due to
@@ -1585,6 +1598,8 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
                nir_var_mem_global | nir_var_mem_shared |
                nir_var_function_temp | nir_var_mem_ssbo | nir_var_mem_global,
       .callback = ir3_mem_access_size_align,
+      .cb_data = so->compiler,
+      .may_lower_unaligned_stores_to_atomics = so->compiler->gen < 6,
    };
 
    progress |= OPT(s, nir_lower_mem_access_bit_sizes, &mem_bit_size_options);

@@ -218,8 +218,8 @@ get_device_extensions(const struct tu_physical_device *device,
       (!device->info->props.has_sw_fuse || device->has_raytracing);
 
    *ext = (struct vk_device_extension_table) { .table = {
-      .KHR_8bit_storage = device->info->props.storage_8bit,
-      .KHR_16bit_storage = device->info->props.storage_16bit,
+      .KHR_8bit_storage = device->info->props.storage_8bit || is_a5xx,
+      .KHR_16bit_storage = device->info->props.storage_16bit || is_a5xx,
       .KHR_acceleration_structure = has_raytracing,
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
@@ -517,7 +517,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->inheritedQueries = true;
 
    /* Vulkan 1.1 */
-   features->storageBuffer16BitAccess            = pdevice->info->props.storage_16bit;
+   features->storageBuffer16BitAccess            =
+      pdevice->info->props.storage_16bit || is_a5xx;
    features->uniformAndStorageBuffer16BitAccess  = false;
    features->storagePushConstant16               = false;
    features->storageInputOutput16                = false;
@@ -538,7 +539,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* Vulkan 1.2 */
    features->samplerMirrorClampToEdge            = true;
    features->drawIndirectCount                   = !is_a5xx;
-   features->storageBuffer8BitAccess             = pdevice->info->props.storage_8bit;
+   features->storageBuffer8BitAccess             =
+      pdevice->info->props.storage_8bit || is_a5xx;
    features->uniformAndStorageBuffer8BitAccess   = false;
    features->storagePushConstant8                = false;
    features->shaderBufferInt64Atomics =
