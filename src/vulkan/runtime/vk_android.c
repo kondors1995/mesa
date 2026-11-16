@@ -31,6 +31,7 @@
 #include "vk_enum_defines.h"
 #include "vk_format.h"
 #include "vk_image.h"
+#include "vk_instance.h"
 #include "vk_log.h"
 #include "vk_physical_device.h"
 #include "vk_queue.h"
@@ -103,6 +104,28 @@ vk_android_hal_close(struct hw_device_t *dev)
    return 0;
 }
 
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+vk_android_hal_get_instance_proc_addr(VkInstance _instance, const char *pName)
+{
+   PFN_vkVoidFunction func = vk_icdGetInstanceProcAddr(_instance, pName);
+   if (func != NULL || _instance == NULL || pName == NULL)
+      return func;
+
+   /* Android's libvulkan loader unconditionally queries Vulkan 1.1
+    * vkGetPhysicalDevice* entrypoints (e.g. vkGetPhysicalDeviceImageFormatProperties2
+    * inside GetPhysicalDeviceSurfaceFormatsKHR) even when an app creates a
+    * Vulkan 1.0 instance without VK_KHR_get_physical_device_properties2.
+    */
+   if (strncmp(pName, "vkGetPhysicalDevice", 19) == 0) {
+      struct vk_instance *instance = vk_instance_from_handle(_instance);
+      func = vk_instance_get_proc_addr_unchecked(instance, pName);
+      if (func != NULL)
+         return func;
+   }
+
+   return NULL;
+}
+
 static int
 vk_android_hal_open(const struct hw_module_t *mod, const char *id,
                     struct hw_device_t **dev)
@@ -128,9 +151,7 @@ vk_android_hal_open(const struct hw_module_t *mod, const char *id,
       .CreateInstance =
          (PFN_vkCreateInstance)vk_icdGetInstanceProcAddr(
             NULL, "vkCreateInstance"),
-      .GetInstanceProcAddr =
-         (PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr(
-            NULL, "vkGetInstanceProcAddr"),
+      .GetInstanceProcAddr = vk_android_hal_get_instance_proc_addr,
    };
 
    *dev = &hal_dev->common;
