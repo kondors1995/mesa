@@ -1197,6 +1197,25 @@ lower_binning(nir_shader *s)
                                      nir_metadata_control_flow, NULL);
 }
 
+static bool
+unshift_ssbo_offset(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_ssbo &&
+       intr->intrinsic != nir_intrinsic_store_ssbo)
+      return false;
+
+   unsigned shift = nir_intrinsic_offset_shift(intr);
+   if (shift == 0)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_src *offset_src = nir_get_io_offset_src(intr);
+   nir_def *byte_offset = nir_ishl_imm(b, offset_src->ssa, shift);
+   nir_src_rewrite(offset_src, byte_offset);
+   nir_intrinsic_set_offset_shift(intr, 0);
+   return true;
+}
+
 nir_mem_access_size_align
 ir3_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
                  uint8_t bit_size, uint32_t align,
@@ -1207,16 +1226,23 @@ ir3_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
    align = nir_combined_align(align, align_offset);
    assert(util_is_power_of_two_nonzero(align));
 
-   if (compiler && compiler->gen < 6 &&
-       (intrin == nir_intrinsic_load_ssbo || intrin == nir_intrinsic_store_ssbo)) {
-      unsigned num_components =
-         (align >= 4 && bytes >= 4) ? MIN2(bytes / 4, 4) : 1;
-      return (nir_mem_access_size_align){
-         .num_components = num_components,
-         .bit_size = 32,
-         .align = 4,
-         .shift = nir_mem_access_shift_method_scalar,
-      };
+   if (compiler && (intrin == nir_intrinsic_load_ssbo ||
+                    intrin == nir_intrinsic_store_ssbo)) {
+      bool force32 =
+         (!compiler->options.storage_16bit &&
+          (bit_size < 32 || bytes < 4 || align < 4)) ||
+         (!compiler->options.storage_8bit &&
+          (bit_size == 8 || (bytes & 1) || align == 1));
+      if (force32) {
+         unsigned num_components =
+            (align >= 4 && bytes >= 4) ? MIN2(bytes / 4, 4) : 1;
+         return (nir_mem_access_size_align){
+            .num_components = num_components,
+            .bit_size = 32,
+            .align = 4,
+            .shift = nir_mem_access_shift_method_scalar,
+         };
+      }
    }
 
    /* But if we're only aligned to 1 byte, use 8-bit loads. If we're only
@@ -1599,13 +1625,25 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
       OPT(s, ir3_nir_lower_64b_regs);
    }
 
+   /* nir_lower_mem_access_bit_sizes assumes byte offsets (offset_shift == 0),
+    * while a6xx+ nir_lower_explicit_io may leave shifted SSBO offsets;
+    * ir3_nir_lower_io_offsets re-applies hardware shifts afterwards.
+    */
+   if (!so->compiler->options.storage_8bit ||
+       !so->compiler->options.storage_16bit) {
+      progress |= OPT(s, nir_shader_intrinsics_pass, unshift_ssbo_offset,
+                      nir_metadata_control_flow, NULL);
+   }
+
    nir_lower_mem_access_bit_sizes_options mem_bit_size_options = {
       .modes = nir_var_mem_constant | nir_var_mem_ubo |
                nir_var_mem_global | nir_var_mem_shared |
                nir_var_function_temp | nir_var_mem_ssbo | nir_var_mem_global,
       .callback = ir3_mem_access_size_align,
       .cb_data = so->compiler,
-      .may_lower_unaligned_stores_to_atomics = so->compiler->gen < 6,
+      .may_lower_unaligned_stores_to_atomics =
+         !so->compiler->options.storage_8bit ||
+         !so->compiler->options.storage_16bit,
    };
 
    progress |= OPT(s, nir_lower_mem_access_bit_sizes, &mem_bit_size_options);
