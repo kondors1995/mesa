@@ -5564,6 +5564,16 @@ tu_CmdPushDescriptorSetWithTemplate2KHR(
 TU_GENX(tu_CmdPushDescriptorSetWithTemplate2KHR);
 
 template <chip CHIP>
+static inline struct fd_reg_pair
+tu_vpc_so_buffer_offset_reg(uint32_t idx, uint32_t val = 0)
+{
+   if constexpr (CHIP == A5XX)
+      return { .reg = tu5_vpc_so_buffer_offset_reg(idx), .value = val };
+   else
+      return VPC_SO_BUFFER_OFFSET(CHIP, idx, val);
+}
+
+template <chip CHIP>
 VKAPI_ATTR void VKAPI_CALL
 tu_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
                                       uint32_t firstBinding,
@@ -5596,8 +5606,12 @@ tu_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
       uint32_t offset = iova & 0x1f;
       iova &= ~static_cast<uint64_t>(0x1f);
 
-      tu_cs_emit_regs(cs, VPC_SO_BUFFER_BASE(CHIP, idx, .qword = iova),
-                      VPC_SO_BUFFER_SIZE(CHIP, idx, size + offset));
+      if constexpr (CHIP == A5XX) {
+         tu5_emit_xfb_buffer(cs, idx, iova, size + offset);
+      } else {
+         tu_cs_emit_regs(cs, VPC_SO_BUFFER_BASE(CHIP, idx, .qword = iova),
+                         VPC_SO_BUFFER_SIZE(CHIP, idx, size + offset));
+      }
 
       cmd->state.streamout_offset[idx] = offset;
    }
@@ -5625,11 +5639,20 @@ tu_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
                              CP_COND_REG_EXEC_0_BINNING);
    }
 
-   tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, false));
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_xfb_override(cs, false);
+   } else {
+      tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, false));
+   }
 
    /* TODO: only update offset for active buffers */
-   for (uint32_t i = 0; i < IR3_MAX_SO_BUFFERS; i++)
-      tu_cs_emit_regs(cs, VPC_SO_BUFFER_OFFSET(CHIP, i, cmd->state.streamout_offset[i]));
+   for (uint32_t i = 0; i < IR3_MAX_SO_BUFFERS; i++) {
+      if constexpr (CHIP == A5XX) {
+         tu5_emit_xfb_buffer_offset(cs, i, cmd->state.streamout_offset[i]);
+      } else {
+         tu_cs_emit_regs(cs, VPC_SO_BUFFER_OFFSET(CHIP, i, cmd->state.streamout_offset[i]));
+      }
+   }
 
    for (uint32_t i = 0; i < (pCounterBuffers ? counterBufferCount : 0); i++) {
       uint32_t idx = firstCounterBuffer + i;
@@ -5641,12 +5664,12 @@ tu_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
 
       VK_FROM_HANDLE(tu_buffer, buf, pCounterBuffers[i]);
 
-      cs->mem_to_reg(VPC_SO_BUFFER_OFFSET(CHIP, idx),
+      cs->mem_to_reg(tu_vpc_so_buffer_offset_reg<CHIP>(idx),
                      vk_buffer_address(&buf->vk, counter_buffer_offset),
                      { .cnt = 1, .wait_cache_flush = true });
 
       if (offset) {
-         cs->rmw(VPC_SO_BUFFER_OFFSET(CHIP, idx), {
+         cs->rmw(tu_vpc_so_buffer_offset_reg<CHIP>(idx), {
             .src1_add = true,
             .src0 = 0xffffffff,
             .src1 = offset,
@@ -5679,12 +5702,20 @@ tu_CmdEndTransformFeedbackEXT(VkCommandBuffer commandBuffer,
                              CP_COND_REG_EXEC_0_BINNING);
    }
 
-   tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, true));
+   if constexpr (CHIP == A5XX) {
+      tu5_emit_xfb_override(cs, true);
+   } else {
+      tu_cs_emit_regs(cs, VPC_SO_OVERRIDE(CHIP, true));
+   }
 
    /* TODO: only flush buffers that need to be flushed */
    for (uint32_t i = 0; i < IR3_MAX_SO_BUFFERS; i++) {
       /* note: FLUSH_BASE is always the same, so it could go in init_hw()? */
-      tu_cs_emit_regs(cs, VPC_SO_FLUSH_BASE(CHIP, i, .qword = global_iova_arr(cmd, flush_base, i)));
+      if constexpr (CHIP == A5XX) {
+         tu5_emit_xfb_flush_base(cs, i, global_iova_arr(cmd, flush_base, i));
+      } else {
+         tu_cs_emit_regs(cs, VPC_SO_FLUSH_BASE(CHIP, i, .qword = global_iova_arr(cmd, flush_base, i)));
+      }
       tu_emit_event_write<CHIP>(cmd, cs, static_cast<enum fd_gpu_event>(FD_FLUSH_SO_0 + i));
    }
 

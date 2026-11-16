@@ -1586,3 +1586,38 @@ tu5_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1)
    tu_cs_emit(cs, A5XX_RB_WINDOW_OFFSET_X(x1) |
                   A5XX_RB_WINDOW_OFFSET_Y(y1));
 }
+
+void
+tu5_emit_xfb_buffer(struct tu_cs *cs, uint32_t idx, uint64_t iova, uint32_t size)
+{
+   tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_BUFFER_BASE(idx), 3);
+   tu_cs_emit_qw(cs, iova);
+   tu_cs_emit(cs, size);
+}
+
+void
+tu5_emit_xfb_override(struct tu_cs *cs, bool disable)
+{
+   tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_OVERRIDE, 1);
+   tu_cs_emit(cs, COND(disable, A5XX_VPC_SO_OVERRIDE_SO_DISABLE));
+}
+
+void
+tu5_emit_xfb_buffer_offset(struct tu_cs *cs, uint32_t idx, uint32_t offset)
+{
+   tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_BUFFER_OFFSET(idx), 1);
+   tu_cs_emit(cs, offset);
+}
+
+void
+tu5_emit_xfb_flush_base(struct tu_cs *cs, uint32_t idx, uint64_t iova)
+{
+   tu_cs_emit_pkt4(cs, REG_A5XX_VPC_SO_FLUSH_BASE(idx), 2);
+   tu_cs_emit_qw(cs, iova);
+}
+
+uint32_t
+tu5_vpc_so_buffer_offset_reg(uint32_t idx)
+{
+   return REG_A5XX_VPC_SO_BUFFER_OFFSET(idx);
+}

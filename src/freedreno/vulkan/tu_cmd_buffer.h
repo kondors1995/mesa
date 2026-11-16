@@ -1149,6 +1149,21 @@ tu5_emit_resolve_scissor(struct tu_cs *cs,
 void
 tu5_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1);
 
+void
+tu5_emit_xfb_buffer(struct tu_cs *cs, uint32_t idx, uint64_t iova, uint32_t size);
+
+void
+tu5_emit_xfb_override(struct tu_cs *cs, bool disable);
+
+void
+tu5_emit_xfb_buffer_offset(struct tu_cs *cs, uint32_t idx, uint32_t offset);
+
+void
+tu5_emit_xfb_flush_base(struct tu_cs *cs, uint32_t idx, uint64_t iova);
+
+uint32_t
+tu5_vpc_so_buffer_offset_reg(uint32_t idx);
+
 /* For bin offsetting we want to do "Euclidean division," where the remainder
  * (i.e. the offset of the bin) is always positive. Unfortunately C/C++
  * remainder and division don't do this, so we have to implement it ourselves.
