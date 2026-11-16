@@ -561,7 +561,9 @@ fdl6_view_init(struct fdl6_view *view, const struct fdl_layout **layouts,
    view->width = width;
    view->height = height;
    view->need_y2_align =
-      tile_mode == TILE6_LINEAR && args->base_miplevel != layout->mip_levels - 1;
+      tile_mode == TILE6_LINEAR &&
+      (args->base_miplevel != layout->mip_levels - 1 ||
+       layout->explicit_layout);
 
    view->ubwc_enabled = ubwc_enabled;
    view->is_mutable = layout->is_mutable;

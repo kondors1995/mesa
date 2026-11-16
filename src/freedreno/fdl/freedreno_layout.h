@@ -142,6 +142,7 @@ struct fdl_layout {
    bool layer_first : 1; /* see above description */
    bool tile_all : 1;
    bool is_mutable : 1;
+   bool explicit_layout : 1;
 
    /* Note that for tiled textures, beyond a certain mipmap level (ie.
     * when width is less than block size) things switch to linear.  In

@@ -6081,6 +6081,9 @@ tu_end_load_store_cond_exec(struct tu_cmd_buffer *cmd,
    tu_cs_emit_qw(cs, global_iova(cmd, dbg_one));
 }
 
+static bool
+tu_attachment_store_unaligned(struct tu_cmd_buffer *cmd, uint32_t a);
+
 template <chip CHIP>
 void
 tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
@@ -6124,6 +6127,8 @@ tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
 
    if (TU_DEBUG(3D_LOAD) ||
        cmd->state.pass->has_fdm ||
+       (iview->image->layout[0].explicit_layout &&
+        tu_attachment_store_unaligned(cmd, a)) ||
        /* Replicating unresolve seems to not work and the blob never uses it.
         */
        (a != gmem_a)) {

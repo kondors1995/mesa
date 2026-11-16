@@ -216,6 +216,7 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
    fdl_set_pitchalign(layout, layout->pitchalign + 6);
 
    if (explicit_layout) {
+      layout->explicit_layout = true;
       offset = explicit_layout->offset;
       layout->pitch0 = explicit_layout->pitch;
       if (align(layout->pitch0, 1 << layout->pitchalign) != layout->pitch0)
@@ -282,9 +283,12 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
        * last level.  The simple solution is to over-allocate a
        * bit the last level to ensure any over-fetch is harmless.
        * The pitch is already sufficiently aligned, but height
-       * may not be. note this only matters if last level is linear
+       * may not be. note this only matters if last level is linear.
+       * External layouts (e.g. Gralloc/dma-buf) may not allocate
+       * trailing row padding, so preserve their exact height and
+       * handle unaligned GMEM load/store via need_y2_align.
        */
-      if (level == params->mip_levels - 1)
+      if (level == params->mip_levels - 1 && !explicit_layout)
          nblocksy = align(nblocksy, 4);
 
       slice->offset = offset + layout->size;
