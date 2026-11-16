@@ -1074,8 +1074,9 @@ ir3_nir_post_finalize(struct ir3_shader *shader)
             .lower_read_invocation_to_cond = true,
             .lower_shuffle = !compiler->has_shfl,
             .lower_relative_shuffle = !compiler->has_shfl,
-            .lower_rotate_to_shuffle = !compiler->has_shfl,
-            .lower_rotate_clustered_to_shuffle = true,
+            .lower_rotate_to_shuffle = false,
+            .lower_rotate_clustered_to_shuffle = compiler->has_shfl,
+            .lower_shuffle_to_32bit = !compiler->has_shfl,
             .lower_inverse_ballot = true,
             .lower_quad_vote = true,
             .lower_reduce = true,
@@ -1092,20 +1093,25 @@ ir3_nir_post_finalize(struct ir3_shader *shader)
       OPT(s, nir_opt_uniform_subgroup, &options);
       OPT(s, nir_lower_subgroups, &options);
       OPT(s, ir3_nir_lower_shuffle, shader);
-   }
+      bool rotate_progress = false;
+      if (!compiler->has_shfl) {
+         NIR_PASS(rotate_progress, s, ir3_nir_lower_rotate_no_shfl, shader,
+                  options.subgroup_size);
+      }
 
-   if (mesa_shader_stage_is_compute(s->info.stage)) {
-      bool progress = false;
-      NIR_PASS(progress, s, ir3_nir_lower_subgroup_id_cs, shader);
+      if (mesa_shader_stage_is_compute(s->info.stage)) {
+         bool progress = rotate_progress;
+         NIR_PASS(progress, s, ir3_nir_lower_subgroup_id_cs, shader);
 
-      if (s->info.derivative_group == DERIVATIVE_GROUP_LINEAR)
-         shader->cs.force_linear_dispatch = true;
+         if (s->info.derivative_group == DERIVATIVE_GROUP_LINEAR)
+            shader->cs.force_linear_dispatch = true;
 
-      /* ir3_nir_lower_subgroup_id_cs creates extra compute intrinsics which
-       * we need to lower again.
-       */
-      if (progress)
-         NIR_PASS(_, s, nir_lower_compute_system_values, NULL);
+         /* ir3_nir_lower_subgroup_id_cs / rotate lowering creates extra compute
+          * intrinsics which we need to lower again.
+          */
+         if (progress)
+            NIR_PASS(_, s, nir_lower_compute_system_values, NULL);
+      }
    }
 
    /* we cannot ensure that ir3_finalize_nir() is only called once, so

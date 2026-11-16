@@ -118,6 +118,8 @@ nir_def *ir3_nir_try_propagate_bit_shift(nir_builder *b,
 
 bool ir3_nir_lower_subgroups_filter(const nir_intrinsic_instr *intrin, const void *data);
 bool ir3_nir_lower_shuffle(nir_shader *nir, struct ir3_shader *shader);
+bool ir3_nir_lower_rotate_no_shfl(nir_shader *nir, struct ir3_shader *shader,
+                                  unsigned subgroup_size);
 bool ir3_nir_opt_subgroups(nir_shader *nir, struct ir3_shader_variant *v);
 
 nir_def *ir3_get_shared_driver_ubo(nir_builder *b,

@@ -299,7 +299,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_shader_quad_control = device->info->props.has_getfiberid,
       .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_extended_types = true,
-      .KHR_shader_subgroup_rotate = !is_a5xx,
+      .KHR_shader_subgroup_rotate = true,
       .KHR_shader_subgroup_uniform_control_flow = true,
       .KHR_shader_terminate_invocation = true,
       .KHR_spirv_1_4 = true,
@@ -936,8 +936,8 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderRelaxedExtendedInstruction = true;
 
    /* VK_KHR_subgroup_rotate */
-   features->shaderSubgroupRotate = !is_a5xx;
-   features->shaderSubgroupRotateClustered = !is_a5xx;
+   features->shaderSubgroupRotate = true;
+   features->shaderSubgroupRotateClustered = true;
 
    /* VK_EXT_fragment_density_map_offset */
    features->fragmentDensityMapOffset = !is_a5xx;
@@ -996,7 +996,9 @@ tu_get_physical_device_properties_1_1(struct tu_physical_device *pdevice,
    p->subgroupSize = tu_subgroup_size(pdevice);
    p->subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
    if (pdevice->info->chip == 5) {
-      p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
+      p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
+                                       VK_SUBGROUP_FEATURE_ROTATE_BIT_KHR |
+                                       VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT_KHR;
    } else {
       p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
                                        VK_SUBGROUP_FEATURE_VOTE_BIT |

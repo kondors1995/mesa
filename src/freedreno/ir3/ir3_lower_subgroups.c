@@ -876,3 +876,116 @@ ir3_nir_lower_shuffle(nir_shader *nir, struct ir3_shader *shader)
    return nir_shader_lower_instructions(nir, filter_shuffle, lower_shuffle,
                                         NULL);
 }
+
+struct lower_rotate_shared_state {
+   struct ir3_shader *shader;
+   uint32_t shared_base;
+   uint32_t subgroup_size;
+   bool has_rotate;
+};
+
+static bool
+lower_rotate_no_shfl_instr(nir_builder *b, nir_intrinsic_instr *intrin,
+                           void *cb_data)
+{
+   if (intrin->intrinsic != nir_intrinsic_rotate)
+      return false;
+
+   struct lower_rotate_shared_state *state = cb_data;
+   nir_def *val = intrin->src[0].ssa;
+   uint32_t cluster = nir_intrinsic_cluster_size(intrin);
+
+   /* Single-lane subgroups (non-compute on A5xx) and clusterSize == 1 rotate
+    * trivially within a single invocation.
+    */
+   if (state->subgroup_size <= 1 || cluster == 1) {
+      nir_def_replace(&intrin->def, val);
+      return true;
+   }
+
+   assert(mesa_shader_stage_is_compute(b->shader->info.stage));
+   assert(intrin->def.num_components == 1);
+
+   if (!state->has_rotate) {
+      state->has_rotate = true;
+      state->shader->cs.force_linear_dispatch = true;
+      state->shared_base = align(b->shader->info.shared_size, 4);
+      uint32_t max_wg_inv = b->shader->info.workgroup_size_variable
+         ? state->subgroup_size * state->shader->compiler->info->max_waves
+         : b->shader->info.workgroup_size[0] *
+           b->shader->info.workgroup_size[1] *
+           b->shader->info.workgroup_size[2];
+      max_wg_inv = MAX2(max_wg_inv, 1);
+      uint32_t scratch_bytes = max_wg_inv * 4;
+      assert(state->shared_base + scratch_bytes <=
+             state->shader->compiler->info->cs_shared_mem_size);
+      b->shader->info.shared_size = state->shared_base + scratch_bytes;
+   }
+
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   unsigned bit_size = val->bit_size;
+   nir_def *val32;
+   if (bit_size == 1)
+      val32 = nir_b2i32(b, val);
+   else if (bit_size < 32)
+      val32 = nir_u2u32(b, val);
+   else
+      val32 = val;
+
+   nir_def *delta = intrin->src[1].ssa;
+   nir_def *local_idx = nir_load_local_invocation_index(b);
+   uint32_t sg_mask = state->subgroup_size - 1;
+   nir_def *local_id = nir_iand_imm(b, local_idx, sg_mask);
+   nir_def *sg_base = nir_iand_imm(b, local_idx, ~sg_mask);
+   uint32_t cluster_mask =
+      (cluster > 0 && cluster < state->subgroup_size) ? (cluster - 1) : sg_mask;
+   nir_def *cluster_base = nir_iand_imm(b, local_id, ~cluster_mask);
+   nir_def *src_lane =
+      nir_ior(b, cluster_base,
+              nir_iand_imm(b, nir_iadd(b, local_id, delta), cluster_mask));
+   nir_def *src_idx = nir_ior(b, sg_base, src_lane);
+
+   nir_def *dst_off = nir_ishl_imm(b, local_idx, 2);
+   nir_def *src_off = nir_ishl_imm(b, src_idx, 2);
+
+   nir_store_shared(b, val32, dst_off, .base = state->shared_base,
+                    .align_mul = 4, .write_mask = 0x1);
+   nir_barrier(b, .execution_scope = SCOPE_SUBGROUP,
+               .memory_scope = SCOPE_WORKGROUP,
+               .memory_semantics = NIR_MEMORY_ACQUIRE | NIR_MEMORY_RELEASE,
+               .memory_modes = nir_var_mem_shared);
+   nir_def *res = nir_load_shared(b, 1, 32, src_off,
+                                  .base = state->shared_base, .align_mul = 4);
+   /* Prevent subsequent rotations in a loop from overwriting shared scratch
+    * before all subgroup lanes finish reading.
+    */
+   nir_barrier(b, .execution_scope = SCOPE_SUBGROUP,
+               .memory_scope = SCOPE_WORKGROUP,
+               .memory_semantics = NIR_MEMORY_ACQUIRE | NIR_MEMORY_RELEASE,
+               .memory_modes = nir_var_mem_shared);
+
+   if (bit_size == 1)
+      res = nir_i2b(b, res);
+   else if (bit_size < 32)
+      res = nir_u2uN(b, res, bit_size);
+
+   nir_def_replace(&intrin->def, res);
+   return true;
+}
+
+/* Lower nir_intrinsic_rotate on GPUs without hardware shfl (A5xx) via shared
+ * memory and subgroup-scoped fences in compute shaders, or identity in
+ * single-lane graphics stages.
+ */
+bool
+ir3_nir_lower_rotate_no_shfl(nir_shader *nir, struct ir3_shader *shader,
+                             unsigned subgroup_size)
+{
+   struct lower_rotate_shared_state state = {
+      .shader = shader,
+      .subgroup_size = subgroup_size,
+   };
+   return nir_shader_intrinsics_pass(nir, lower_rotate_no_shfl_instr,
+                                     nir_metadata_control_flow, &state);
+}
