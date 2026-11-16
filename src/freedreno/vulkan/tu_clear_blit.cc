@@ -6128,6 +6128,7 @@ tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
    if (TU_DEBUG(3D_LOAD) ||
        cmd->state.pass->has_fdm ||
        (iview->image->layout[0].explicit_layout &&
+        iview->view.need_y2_align &&
         tu_attachment_store_unaligned(cmd, a)) ||
        /* Replicating unresolve seems to not work and the blob never uses it.
         */
