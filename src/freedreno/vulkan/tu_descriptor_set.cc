@@ -825,8 +825,7 @@ tu_CreateDescriptorPool(VkDevice _device,
       pool->host_memory_end = reinterpret_cast<uint8_t*>(pool) + size;
    } else {
       if (bo_size) {
-         util_vma_heap_init(&pool->bo_heap, TU_POOL_HEAP_OFFSET,
-                            bo_size + TU_POOL_HEAP_OFFSET);
+         util_vma_heap_init(&pool->bo_heap, TU_POOL_HEAP_OFFSET, bo_size);
          pool->bo_heap.alloc_high = false;
       }
    }
@@ -922,8 +921,8 @@ tu_ResetDescriptorPool(VkDevice _device,
 
    if (!pool->host_memory_base && pool->size) {
       util_vma_heap_finish(&pool->bo_heap);
-      util_vma_heap_init(&pool->bo_heap, TU_POOL_HEAP_OFFSET,
-                         pool->size + TU_POOL_HEAP_OFFSET);
+      util_vma_heap_init(&pool->bo_heap, TU_POOL_HEAP_OFFSET, pool->size);
+      pool->bo_heap.alloc_high = false;
    }
 
    pool->entry_count = 0;
