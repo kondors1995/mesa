@@ -951,16 +951,20 @@ lower_rotate_no_shfl_instr(nir_builder *b, nir_intrinsic_instr *intrin,
 
    nir_store_shared(b, val32, dst_off, .base = state->shared_base,
                     .align_mul = 4, .write_mask = 0x1);
-   nir_barrier(b, .execution_scope = SCOPE_SUBGROUP,
+   /* Adreno A5xx does not execute a 32-lane wave in strict SIMD lockstep across
+    * shared memory (0..15 and 16..31 can run independently across stalls), and
+    * ir3 only emits a hardware execution barrier for SCOPE_WORKGROUP.
+    */
+   nir_barrier(b, .execution_scope = SCOPE_WORKGROUP,
                .memory_scope = SCOPE_WORKGROUP,
                .memory_semantics = NIR_MEMORY_ACQUIRE | NIR_MEMORY_RELEASE,
                .memory_modes = nir_var_mem_shared);
    nir_def *res = nir_load_shared(b, 1, 32, src_off,
                                   .base = state->shared_base, .align_mul = 4);
    /* Prevent subsequent rotations in a loop from overwriting shared scratch
-    * before all subgroup lanes finish reading.
+    * before all lanes finish reading.
     */
-   nir_barrier(b, .execution_scope = SCOPE_SUBGROUP,
+   nir_barrier(b, .execution_scope = SCOPE_WORKGROUP,
                .memory_scope = SCOPE_WORKGROUP,
                .memory_semantics = NIR_MEMORY_ACQUIRE | NIR_MEMORY_RELEASE,
                .memory_modes = nir_var_mem_shared);
