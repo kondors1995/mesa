@@ -3082,8 +3082,11 @@ tu_copy_buffer_to_image(struct tu_cmd_buffer *cmd,
          img_extent = (VkExtent2D) { extent.height, extent.width };
    }
 
+   uint32_t dst_plane = tu6_plane_index(dst_image->vk.format,
+                                        info->imageSubresource.aspectMask);
    ops->setup(cmd, cs, src_format, dst_format,
-              info->imageSubresource.aspectMask, blit_param, false, dst_image->layout[0].ubwc,
+              info->imageSubresource.aspectMask, blit_param, false,
+              dst_image->layout[dst_plane].ubwc,
               static_cast<VkSampleCountFlagBits>(dst_image->layout[0].nr_samples),
               static_cast<VkSampleCountFlagBits>(dst_image->layout[0].nr_samples));
 

@@ -758,7 +758,11 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
    assert(!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) ||
           tile_mode == TILE6_3);
 
-   for (uint32_t i = 0; i < tu6_plane_count(image->vk.format); i++) {
+   uint32_t plane_count = tu6_plane_count(image->vk.format);
+relayout_planes:
+   image->total_size = 0;
+   memset(image->layout, 0, sizeof(image->layout));
+   for (uint32_t i = 0; i < plane_count; i++) {
       struct fdl_layout *layout = &image->layout[i];
       enum pipe_format format = tu6_plane_format(image->vk.format, i);
       uint32_t width0 = vk_format_get_plane_width(image->vk.format, i, image->vk.extent.width);
@@ -865,6 +869,30 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
       }
 
       image->total_size = MAX2(image->total_size, layout->size);
+   }
+
+   /* Multi-planar YUV views read one TILE_MODE and one FLAG bit from plane 0
+    * across all planes; if any plane fell back to linear or non-UBWC, align all
+    * planes to match so TPL1 and r2d/r3d copies agree.
+    */
+   if (CHIP != A5XX && !plane_layouts && !force_ubwc &&
+       vk_format_get_plane_count(image->vk.format) > 1) {
+      bool any_linear = false;
+      bool any_no_ubwc = false;
+      for (uint32_t i = 0; i < plane_count; i++) {
+         any_linear |= (image->layout[i].tile_mode == TILE6_LINEAR);
+         any_no_ubwc |= !image->layout[i].ubwc;
+      }
+      if ((any_linear && tile_mode != TILE6_LINEAR) ||
+          (any_no_ubwc && ubwc_enabled)) {
+         if (any_linear) {
+            tile_mode = TILE6_LINEAR;
+            ubwc_enabled = false;
+         } else {
+            ubwc_enabled = false;
+         }
+         goto relayout_planes;
+      }
    }
 
    image->max_tile_w_constraint_fdm = ~0;
