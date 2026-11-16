@@ -13,6 +13,7 @@
 #include "tu_common.h"
 
 #include "fdl/freedreno_lrz_layout.h"
+#include "tu_cs.h"
 #include "tu_knl.h"
 
 #define TU_MAX_PLANE_COUNT 3
@@ -43,6 +44,23 @@ struct tu_image
    /* Maximum width/height of tiles for use with this image, or ~0 if no constraints. */
    uint32_t max_tile_w_constraint_fdm;
    uint32_t max_tile_h_constraint_fdm;
+
+   /* QCOM TP10 UBWC format (3 pixels per 4B Y / 8B UV, 48x4 / 24x4 UBWC) */
+   bool is_tp10;
+   bool is_nv21;
+
+   struct {
+      bool needed;
+      uint64_t src_offset;
+      uint32_t src_pitch;
+   } yuv_repack[3];
+   bool has_yuv_repack;
+   struct tu_bo *repack_bo;
+   uint64_t repack_size;
+   struct list_head yuv_repack_link;
+   uint64_t yuv_repack_id;
+   struct tu_cs repack_cs;
+   bool repack_cs_initialized;
 
    /* Identity of the image for RP hashing and analysis, per
     * tu_image_id_mode. 0 means no identity was assigned and must never

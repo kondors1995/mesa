@@ -161,6 +161,7 @@ vk_android_hal_open(const struct hw_module_t *mod, const char *id,
 static VkResult
 vk_gralloc_to_drm_explicit_layout(
    struct u_gralloc_buffer_handle *in_hnd,
+   uint32_t width, uint32_t height,
    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
    VkSubresourceLayout *out_layouts, int max_planes)
 {
@@ -224,6 +225,41 @@ vk_gralloc_to_drm_explicit_layout(
       VkSubresourceLayout tmp = out_layouts[1];
       out_layouts[1] = out_layouts[2];
       out_layouts[2] = tmp;
+   }
+
+   if (u_gralloc_get_type(u_gralloc) == U_GRALLOC_TYPE_QCOM &&
+       out->drmFormatModifier == DRM_FORMAT_MOD_QCOM_COMPRESSED &&
+       out->drmFormatModifierPlaneCount == 2 &&
+       width > 0 && height > 0) {
+      /* QCOM GET_YUV_PLANE_INFO returns data-plane pointers (past UBWC meta),
+       * so out_layouts[1].offset currently equals Y_size + UV_meta_size.
+       * Shift to UV_meta start (Y_meta_size + Y_size) for Turnip's layout.
+       */
+      uint32_t y_block_w = 32, y_block_h = 8;
+      uint32_t uv_block_w = 16, uv_block_h = 8;
+      if (info.drm_fourcc == DRM_FORMAT_NV15) {
+         y_block_w = 48;
+         y_block_h = 4;
+         uv_block_w = 24;
+         uv_block_h = 4;
+      } else if (info.drm_fourcc == DRM_FORMAT_P010) {
+         y_block_w = 32;
+         y_block_h = 4;
+         uv_block_w = 16;
+         uv_block_h = 4;
+      }
+
+      uint32_t y_meta_w = ALIGN_POT(DIV_ROUND_UP(width, y_block_w), 64);
+      uint32_t y_meta_h = ALIGN_POT(DIV_ROUND_UP(height, y_block_h), 16);
+      uint32_t y_meta_size = ALIGN_POT(y_meta_w * y_meta_h, 4096);
+
+      uint32_t uv_w = DIV_ROUND_UP(width, 2);
+      uint32_t uv_h = DIV_ROUND_UP(height, 2);
+      uint32_t uv_meta_w = ALIGN_POT(DIV_ROUND_UP(uv_w, uv_block_w), 64);
+      uint32_t uv_meta_h = ALIGN_POT(DIV_ROUND_UP(uv_h, uv_block_h), 16);
+      uint32_t uv_meta_size = ALIGN_POT(uv_meta_w * uv_meta_h, 4096);
+
+      out_layouts[1].offset = out_layouts[1].offset + y_meta_size - uv_meta_size;
    }
 
    return VK_SUCCESS;
@@ -338,8 +374,10 @@ vk_android_get_anb_layout(
       .pixel_stride = native_buffer->stride,
    };
 
-   return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
-                                            out_layouts, max_planes);
+   return vk_gralloc_to_drm_explicit_layout(&gr_handle,
+                                            pCreateInfo->extent.width,
+                                            pCreateInfo->extent.height,
+                                            out, out_layouts, max_planes);
 }
 
 VkResult
@@ -705,8 +743,10 @@ vk_android_get_ahb_layout(
       .hal_format = description.format,
    };
 
-   return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
-                                            out_layouts, max_planes);
+   return vk_gralloc_to_drm_explicit_layout(&gr_handle,
+                                            description.width,
+                                            description.height,
+                                            out, out_layouts, max_planes);
 }
 
 /* From the Android hardware_buffer.h header:
@@ -1137,15 +1177,36 @@ get_ahb_buffer_format_properties2(
    case DRM_FORMAT_NV12:
       external_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
       break;
+   case DRM_FORMAT_NV21:
+      external_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+      p->samplerYcbcrConversionComponents.r = VK_COMPONENT_SWIZZLE_B;
+      p->samplerYcbcrConversionComponents.b = VK_COMPONENT_SWIZZLE_R;
+      break;
+   case DRM_FORMAT_NV15:
    case DRM_FORMAT_P010:
       external_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
       break;
    case DRM_FORMAT_P210:
       external_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16;
       break;
+   case DRM_FORMAT_R8:
+      external_format = VK_FORMAT_R8_UNORM;
+      break;
+   case DRM_FORMAT_RG88:
+      external_format = VK_FORMAT_R8G8_UNORM;
+      break;
    case DRM_FORMAT_XBGR8888:
       /* This can be resolved from IMPLEMENTATION_DEFINED AHB format */
       external_format = VK_FORMAT_R8G8B8A8_UNORM;
+      break;
+   case DRM_FORMAT_XRGB8888:
+      external_format = VK_FORMAT_B8G8R8A8_UNORM;
+      break;
+   case DRM_FORMAT_XBGR2101010:
+      external_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+      break;
+   case DRM_FORMAT_ARGB2101010:
+      external_format = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
       break;
    default:
       mesa_loge("Unsupported external DRM format: %d", info.drm_fourcc);

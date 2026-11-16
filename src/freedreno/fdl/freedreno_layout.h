@@ -112,6 +112,9 @@ struct fdl_image_params {
 
    bool force_disable_linear_fallback;
 
+   /* QCOM TP10 (3 pixels packed in 4B Y / 8B UV, 48x4 / 24x4 UBWC) */
+   bool tp10;
+
    uint32_t plane;
 };
 
@@ -177,6 +180,7 @@ struct fdl_layout {
    uint64_t size;       /* Size of the whole image, in bytes. */
    uint32_t base_align; /* Alignment of the base address, in bytes. */
    uint8_t pitchalign;  /* log2(pitchalign) */
+   bool tp10;
    uint32_t plane;
 };
 
@@ -329,7 +333,9 @@ uint64_t fdl6_layout_multiplanar_image(struct fdl_layout *y_layout,
 static inline void
 fdl_set_pitchalign(struct fdl_layout *layout, unsigned pitchalign)
 {
-   uint32_t nblocksx = util_format_get_nblocksx(layout->format, layout->width0);
+   uint32_t nblocksx = layout->tp10
+      ? DIV_ROUND_UP(layout->width0, 3)
+      : util_format_get_nblocksx(layout->format, layout->width0);
    layout->pitchalign = pitchalign;
    layout->pitch0 = align(nblocksx * layout->cpp, 1 << pitchalign);
 }
@@ -373,6 +379,7 @@ enum fdl_chroma_location {
 
 struct fdl_view_args {
    uint64_t iova;
+   uint64_t plane_iova[3];
    uint32_t base_miplevel;
    uint32_t level_count;
    uint32_t base_array_layer;

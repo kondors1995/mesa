@@ -733,6 +733,8 @@ tu_descriptor_set_destroy(struct tu_device *device,
 {
    assert(!pool->host_memory_base);
 
+   util_dynarray_fini(&set->yuv_repack_ids);
+
    if (set->size) {
       util_vma_heap_free(&pool->bo_heap,
                          static_cast<uint64_t>(set->offset) + TU_POOL_HEAP_OFFSET,
@@ -876,6 +878,8 @@ tu_destroy_descriptor_pool_entries(struct tu_device *device,
       vk_descriptor_set_layout_unref(&device->vk, &set->layout->vk);
       if (!pool->host_memory_base)
          tu_descriptor_set_destroy(device, pool, set);
+      else
+         util_dynarray_fini(&set->yuv_repack_ids);
    }
 
    list_inithead(&pool->desc_sets);
@@ -994,6 +998,8 @@ tu_FreeDescriptorSets(VkDevice _device,
 
       if (set && !pool->host_memory_base)
          tu_descriptor_set_destroy(device, pool, set);
+      else if (set)
+         util_dynarray_fini(&set->yuv_repack_ids);
    }
    return VK_SUCCESS;
 }
@@ -1271,6 +1277,18 @@ sampler_has_subsampled_bit(const struct tu_descriptor_update_template_sampler *s
 }
 
 static void
+tu_descriptor_set_track_image_info(struct tu_descriptor_set *set,
+                                   const VkDescriptorImageInfo *ii)
+{
+   if (!ii || !ii->imageView)
+      return;
+
+   VK_FROM_HANDLE(tu_image_view, iv, ii->imageView);
+   if (iv && iv->image && iv->image->has_yuv_repack && iv->image->yuv_repack_id)
+      tu_dynarray_add_unique_u64(&set->yuv_repack_ids, iv->image->yuv_repack_id);
+}
+
+static void
 write_combined_image_sampler_descriptor(uint32_t *dst,
                                         VkDescriptorType descriptor_type,
                                         const VkDescriptorImageInfo *image_info,
@@ -1520,6 +1538,7 @@ tu_update_descriptor_sets(const struct tu_device *device,
                           ii->imageLayout);
             }
             write_image_descriptor(ptr, writeset->descriptorType, writeset->pImageInfo + j);
+            tu_descriptor_set_track_image_info(set, writeset->pImageInfo + j);
             break;
          case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
             if (tu_dbg_log_enabled()) {
@@ -1536,6 +1555,7 @@ tu_update_descriptor_sets(const struct tu_device *device,
             write_combined_image_sampler_descriptor(
                ptr, writeset->descriptorType, writeset->pImageInfo + j, !samplers,
                sampler_has_subsampled_bit(samplers, writeset->dstArrayElement + j));
+            tu_descriptor_set_track_image_info(set, writeset->pImageInfo + j);
 
             if (copy_immutable_samplers)
                write_sampler_push(ptr + FDL6_TEX_CONST_DWORDS, &samplers[writeset->dstArrayElement + j]);
@@ -1642,6 +1662,10 @@ tu_update_descriptor_sets(const struct tu_device *device,
 
          src_ptr += src_binding_layout->size / 4;
          dst_ptr += dst_binding_layout->size / 4;
+      }
+
+      util_dynarray_foreach (&src_set->yuv_repack_ids, uint64_t, id) {
+         tu_dynarray_add_unique_u64(&dst_set->yuv_repack_ids, *id);
       }
    }
 }
@@ -1906,17 +1930,21 @@ tu_update_descriptor_set_with_template(
          case VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM:
          case VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM:
          case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: {
-            write_image_descriptor(ptr, templ->entry[i].descriptor_type,
-                                   static_cast<const VkDescriptorImageInfo *>(src));
+            const VkDescriptorImageInfo *ii = static_cast<const VkDescriptorImageInfo *>(src);
+            write_image_descriptor(ptr, templ->entry[i].descriptor_type, ii);
+            tu_descriptor_set_track_image_info(set, ii);
             break;
          }
-         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+            const VkDescriptorImageInfo *ii = static_cast<const VkDescriptorImageInfo *>(src);
             write_combined_image_sampler_descriptor(ptr, templ->entry[i].descriptor_type,
-                                                    static_cast<const VkDescriptorImageInfo *>(src), !samplers,
+                                                    ii, !samplers,
                                                     sampler_has_subsampled_bit(samplers, j));
+            tu_descriptor_set_track_image_info(set, ii);
             if (templ->entry[i].copy_immutable_samplers)
                write_sampler_push(ptr + FDL6_TEX_CONST_DWORDS, &samplers[j]);
             break;
+         }
          case VK_DESCRIPTOR_TYPE_SAMPLER:
             if (!templ->entry[i].immutable_samplers)
                write_sampler_descriptor(ptr, static_cast<const VkDescriptorImageInfo *>(src)->sampler);

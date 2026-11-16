@@ -45,6 +45,7 @@ fdl6_format_swiz(enum pipe_format format, bool has_z24uint_s8uint,
    case PIPE_FORMAT_B8G8_R8G8_UNORM:
    case PIPE_FORMAT_G8_B8R8_420_UNORM:
    case PIPE_FORMAT_G8_B8_R8_420_UNORM:
+   case PIPE_FORMAT_X6G10_X6B10X6R10_420_UNORM:
       /* These formats are currently only used for Vulkan, and border colors
        * aren't allowed on these formats in Vulkan because, from the
        * description of VkImageViewCreateInfo:
@@ -214,12 +215,14 @@ fdl6_view_init(struct fdl6_view *view, const struct fdl_layout **layouts,
       if (ubwc_enabled) {
          /* no separate ubwc base, image must have the expected layout */
          for (uint32_t i = 0; i < 3; i++) {
-            base_addr[i] = args->iova +
+            uint64_t plane_iova = args->plane_iova[i] ? args->plane_iova[i] : args->iova;
+            base_addr[i] = plane_iova +
                fdl_ubwc_offset(layouts[i], args->base_miplevel, args->base_array_layer);
          }
       } else {
          for (uint32_t i = 0; i < 3; i++) {
-            base_addr[i] = args->iova +
+            uint64_t plane_iova = args->plane_iova[i] ? args->plane_iova[i] : args->iova;
+            base_addr[i] = plane_iova +
                fdl_surface_offset(layouts[i], args->base_miplevel, args->base_array_layer);
          }
       }
@@ -240,9 +243,19 @@ fdl6_view_init(struct fdl6_view *view, const struct fdl_layout **layouts,
       fd6_texture_swap(args->format, (enum a6xx_tile_mode)layout->tile_mode, layout->is_mutable);
    enum a6xx_tile_mode tile_mode = (enum a6xx_tile_mode)fdl_tile_mode(layout, args->base_miplevel);
 
-   if (ubwc_enabled && util_format_is_yuv(args->format) &&
-       util_format_get_num_planes(args->format) == 2) {
+   if (layout->tp10) {
+      if (multi_plane)
+         texture_format = FMT6_TP10;
+      else
+         texture_format = layout->plane == 0 ? FMT6_TP10_Y : FMT6_TP10_UV;
+   } else if (ubwc_enabled && util_format_is_yuv(args->format) &&
+              util_format_get_num_planes(args->format) == 2 &&
+              args->format != PIPE_FORMAT_X6G10_X6B10X6R10_420_UNORM) {
       texture_format = FMT6_R8_G8B8_2PLANE_420_UNORM;
+   } else if (args->format == PIPE_FORMAT_X6R10_UNORM) {
+      texture_format = FMT6_P010_Y;
+   } else if (args->format == PIPE_FORMAT_X6R10X6G10_UNORM) {
+      texture_format = FMT6_P010_UV;
    }
 
    bool is_d24s8 = (args->format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||

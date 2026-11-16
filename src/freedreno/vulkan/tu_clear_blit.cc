@@ -684,7 +684,7 @@ r2d_setup_common(struct tu_cmd_buffer *cmd,
                  bool ubwc,
                  bool scissor)
 {
-   if (!cmd->state.pass && cmd->device->dbg_renderpass_stomp_cs) {
+   if (cmd && !cmd->state.pass && cmd->device->dbg_renderpass_stomp_cs) {
       tu_cs_emit_call(cs, cmd->device->dbg_renderpass_stomp_cs);
    }
 
@@ -795,10 +795,11 @@ r2d_teardown(struct tu_cmd_buffer *cmd,
    /* nothing to do here */
 }
 
+template <chip CHIP>
 static void
-r2d_run(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+r2d_run_device(struct tu_device *device, struct tu_cs *cs)
 {
-   if (FD_QUIRK(cmd->device->physical_device->info, QCTDD04536579)) {
+   if (FD_QUIRK(device->physical_device->info, QCTDD04536579)) {
       tu_cs_emit_wfi(cs);
       cs->rmw(A6XX_RB_DBG_ECO_CNTL(), {
          .src0 = ~BITFIELD_BIT(24),
@@ -809,19 +810,25 @@ r2d_run(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    /* TODO: try to track when there has been a draw without any intervening
     * WFI or CP_EVENT_WRITE and only WFI then.
     */
-   if (cmd->device->physical_device->info->props.blit_wfi_quirk)
+   if (device->physical_device->info->props.blit_wfi_quirk)
       tu_cs_emit_wfi(cs);
 
    tu_cs_emit_pkt7(cs, CP_BLIT, 1);
    tu_cs_emit(cs, CP_BLIT_0_OP(BLIT_OP_SCALE));
 
-   if (FD_QUIRK(cmd->device->physical_device->info, QCTDD04536579)) {
+   if (FD_QUIRK(device->physical_device->info, QCTDD04536579)) {
       tu_cs_emit_wfi(cs);
       cs->rmw(A6XX_RB_DBG_ECO_CNTL(), {
          .src0 = ~BITFIELD_BIT(24),
          .src1 =  0,
       });
    }
+}
+
+static void
+r2d_run(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+{
+   r2d_run_device<A6XX>(cmd->device, cs);
 }
 
 /* r3d_ = shader path operations */
@@ -1985,7 +1992,7 @@ r3d_setup(struct tu_cmd_buffer *cmd,
       return;
    }
 
-   if (!cmd->state.pass && cmd->device->dbg_renderpass_stomp_cs) {
+   if (cmd && !cmd->state.pass && cmd->device->dbg_renderpass_stomp_cs) {
       tu_cs_emit_call(cs, cmd->device->dbg_renderpass_stomp_cs);
    }
 
@@ -6820,3 +6827,120 @@ tu_blit_subsampled_apron(struct tu_cmd_buffer *cmd,
    }
 }
 TU_GENX(tu_blit_subsampled_apron);
+
+template <chip CHIP>
+static void
+tu_emit_yuv_repack_ops(struct tu_device *device,
+                       struct tu_cs *cs,
+                       struct tu_image *image)
+{
+   for (uint32_t p = 0; p < 3; p++) {
+      if (!image->yuv_repack[p].needed)
+         continue;
+
+      const struct fdl_layout *layout = &image->layout[p];
+      enum pipe_format fmt = layout->format;
+
+      struct fdl6_view dst;
+      const struct fdl_view_args args = {
+         .iova = image->repack_bo->iova,
+         .base_miplevel = 0,
+         .level_count = 1,
+         .base_array_layer = 0,
+         .layer_count = 1,
+         .swiz = {
+            PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y, PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W
+         },
+         .format = fmt,
+         .type = FDL_VIEW_TYPE_2D,
+      };
+      fdl6_view_init<CHIP>(&dst, &layout, &args, false);
+
+      r2d_setup_common<CHIP>(NULL, cs, fmt, fmt, VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                             false, false, false);
+      r2d_dst<CHIP>(cs, &dst, 0, fmt);
+
+      for (uint32_t y = 0; y < layout->height0; y++) {
+         uint64_t src_va = image->iova + image->yuv_repack[p].src_offset +
+                           (uint64_t)y * image->yuv_repack[p].src_pitch;
+         uint32_t x = (src_va & 63) / layout->cpp;
+         uint32_t src_pitch = align(image->yuv_repack[p].src_pitch, 64);
+
+         r2d_src_buffer<CHIP>(NULL, cs, fmt, src_va & ~63, src_pitch,
+                              x + layout->width0, 1, fmt);
+         r2d_coords<CHIP>(NULL, cs, (VkOffset2D){0, (int32_t)y},
+                          (VkOffset2D){(int32_t)x, 0},
+                          (VkExtent2D){layout->width0, 1});
+         r2d_run_device<CHIP>(device, cs);
+      }
+
+      r2d_teardown(NULL, cs);
+   }
+}
+
+template <chip CHIP>
+void
+tu_repack_yuv_image(struct tu_cmd_buffer *cmd, struct tu_image *image)
+{
+   if constexpr (CHIP == A5XX || CHIP >= A7XX)
+      return;
+
+   if (!image->has_yuv_repack || !image->repack_bo || !image->iova)
+      return;
+
+   if (!cmd->state.pass)
+      tu_emit_cache_flush_ccu<CHIP>(cmd, &cmd->cs, TU_CMD_CCU_SYSMEM);
+
+   tu_emit_yuv_repack_ops<CHIP>(cmd->device, &cmd->cs, image);
+}
+TU_GENX(tu_repack_yuv_image);
+
+template <chip CHIP>
+void
+tu_build_yuv_repack_cs(struct tu_device *device, struct tu_image *image)
+{
+   if constexpr (CHIP != A6XX)
+      return;
+
+   if (!image->has_yuv_repack || !image->repack_bo || !image->iova ||
+       image->repack_cs_initialized)
+      return;
+
+   tu_cs_init(&image->repack_cs, device, TU_CS_MODE_GROW, 4096,
+              "yuv repack cs");
+   tu_cs_begin(&image->repack_cs);
+
+   struct tu_cs *cs = &image->repack_cs;
+   uint64_t seqno_va = device->global_bo->iova +
+                       offsetof(struct tu6_global, seqno_dummy);
+
+   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 4);
+   tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(PC_CCU_FLUSH_COLOR_TS));
+   tu_cs_emit_qw(cs, seqno_va);
+   tu_cs_emit(cs, 0);
+
+   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+   tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(PC_CCU_INVALIDATE_COLOR));
+
+   tu_cs_emit_wfi(cs);
+   tu_emit_rb_ccu_cntl<CHIP>(cs, device, false);
+
+   tu_emit_yuv_repack_ops<CHIP>(device, cs, image);
+
+   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 4);
+   tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(PC_CCU_FLUSH_COLOR_TS));
+   tu_cs_emit_qw(cs, seqno_va);
+   tu_cs_emit(cs, 0);
+
+   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+   tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(PC_CCU_INVALIDATE_COLOR));
+
+   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
+   tu_cs_emit(cs, CP_EVENT_WRITE_0_EVENT(CACHE_INVALIDATE));
+
+   tu_cs_emit_wfi(cs);
+
+   tu_cs_end(cs);
+   image->repack_cs_initialized = true;
+}
+TU_GENX(tu_build_yuv_repack_cs);

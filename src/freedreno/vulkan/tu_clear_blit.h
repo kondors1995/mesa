@@ -129,4 +129,12 @@ tu_blit_subsampled_apron(struct tu_cmd_buffer *cmd,
                          const tu_rect2d_float *src_coord,
                          unsigned count);
 
+template <chip CHIP>
+void
+tu_repack_yuv_image(struct tu_cmd_buffer *cmd, struct tu_image *image);
+
+template <chip CHIP>
+void
+tu_build_yuv_repack_cs(struct tu_device *device, struct tu_image *image);
+
 #endif /* TU_CLEAR_BLIT_H */

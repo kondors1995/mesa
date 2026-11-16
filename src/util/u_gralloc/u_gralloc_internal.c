@@ -29,14 +29,104 @@ struct droid_yuv_format {
    int fourcc; /* DRM_FORMAT_ */
 };
 
+/* Qualcomm / Android vendor YUV HAL pixel formats not always in NDK headers */
+#ifndef HAL_PIXEL_FORMAT_YCBCR_P010
+#define HAL_PIXEL_FORMAT_YCBCR_P010 0x36
+#endif
+#ifndef HAL_PIXEL_FORMAT_NV12_HEIF
+#define HAL_PIXEL_FORMAT_NV12_HEIF 0x00000116
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS
+#define HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS 0x7FA30C04
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC
+#define HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC 0x7FA30C06
+#endif
+
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC
+#define HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC 0x7FA30C09
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_P010_UBWC
+#define HAL_PIXEL_FORMAT_YCbCr_420_P010_UBWC 0x124
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_P010_VENUS
+#define HAL_PIXEL_FORMAT_YCbCr_420_P010_VENUS 0x7FA30C0A
+#endif
+#ifndef HAL_PIXEL_FORMAT_NV12_ENCODEABLE
+#define HAL_PIXEL_FORMAT_NV12_ENCODEABLE 0x102
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCbCr_420_SP
+#define HAL_PIXEL_FORMAT_YCbCr_420_SP 0x109
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO
+#define HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO 0x7FA30C01
+#endif
+#ifndef HAL_PIXEL_FORMAT_NV21_ENCODEABLE
+#define HAL_PIXEL_FORMAT_NV21_ENCODEABLE 0x7FA30C00
+#endif
+#ifndef HAL_PIXEL_FORMAT_NV21_ZSL
+#define HAL_PIXEL_FORMAT_NV21_ZSL 0x113
+#endif
+#ifndef HAL_PIXEL_FORMAT_YCrCb_420_SP_VENUS
+#define HAL_PIXEL_FORMAT_YCrCb_420_SP_VENUS 0x114
+#endif
+#ifndef HAL_PIXEL_FORMAT_R_8
+#define HAL_PIXEL_FORMAT_R_8 0x10D
+#endif
+#ifndef HAL_PIXEL_FORMAT_RG_88
+#define HAL_PIXEL_FORMAT_RG_88 0x10E
+#endif
+#ifndef HAL_PIXEL_FORMAT_BGRX_8888
+#define HAL_PIXEL_FORMAT_BGRX_8888 0x112
+#endif
+#ifndef HAL_PIXEL_FORMAT_RGBX_1010102
+#define HAL_PIXEL_FORMAT_RGBX_1010102 0x118
+#endif
+#ifndef HAL_PIXEL_FORMAT_BGRA_1010102
+#define HAL_PIXEL_FORMAT_BGRA_1010102 0x11A
+#endif
+#ifndef HAL_PIXEL_FORMAT_Y8
+#define HAL_PIXEL_FORMAT_Y8 0x20203859
+#endif
+#ifndef HAL_PIXEL_FORMAT_R8_UNORM
+#define HAL_PIXEL_FORMAT_R8_UNORM 0x38
+#endif
+#ifndef HAL_PIXEL_FORMAT_R16_UINT
+#define HAL_PIXEL_FORMAT_R16_UINT 0x39
+#endif
+#ifndef HAL_PIXEL_FORMAT_R16G16_UINT
+#define HAL_PIXEL_FORMAT_R16G16_UINT 0x3A
+#endif
+
 /* The following table is used to look up a DRI image FourCC based
  * on native format and information contained in android_ycbcr struct. */
 static const struct droid_yuv_format droid_yuv_formats[] = {
    /* Native format, YCrCb, Chroma step, DRI image FourCC */
    {HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_YCbCr_420_888, YCrCb, 2, DRM_FORMAT_NV21},
    {HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 1, DRM_FORMAT_YUV420},
    {HAL_PIXEL_FORMAT_YCbCr_420_888, YCrCb, 1, DRM_FORMAT_YVU420},
    {HAL_PIXEL_FORMAT_YV12, YCrCb, 1, DRM_FORMAT_YVU420},
+   {HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_NV12_ENCODEABLE, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_YCbCr_420_SP, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_NV12_HEIF, YCbCr, 2, DRM_FORMAT_NV12},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP, YCrCb, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP, YCbCr, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_NV21_ZSL, YCrCb, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_NV21_ZSL, YCbCr, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP_VENUS, YCrCb, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP_VENUS, YCbCr, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO, YCrCb, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO, YCbCr, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_NV21_ENCODEABLE, YCrCb, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_NV21_ENCODEABLE, YCbCr, 2, DRM_FORMAT_NV21},
+   {HAL_PIXEL_FORMAT_YCBCR_P010, YCbCr, 4, DRM_FORMAT_P010},
+   {HAL_PIXEL_FORMAT_YCbCr_420_P010_UBWC, YCbCr, 4, DRM_FORMAT_P010},
+   {HAL_PIXEL_FORMAT_YCbCr_420_P010_VENUS, YCbCr, 4, DRM_FORMAT_P010},
+   /* QCOM TP10 UBWC: 10-bit packed 3 pixels in 4 bytes (chroma_step=3). */
+   {HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC, YCbCr, 3, DRM_FORMAT_NV15},
    /* HACK: See droid_create_image_from_prime_fds() and
     * https://issuetracker.google.com/32077885. */
    {HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, YCbCr, 2, DRM_FORMAT_NV12},
@@ -87,16 +177,25 @@ get_hal_format_bpp(int native)
        */
    case HAL_PIXEL_FORMAT_RGBX_8888:
    case HAL_PIXEL_FORMAT_BGRA_8888:
+   case HAL_PIXEL_FORMAT_BGRX_8888:
    case HAL_PIXEL_FORMAT_RGBA_1010102:
+   case HAL_PIXEL_FORMAT_RGBX_1010102:
+   case HAL_PIXEL_FORMAT_BGRA_1010102:
+   case HAL_PIXEL_FORMAT_R16G16_UINT:
    case HAL_PIXEL_FORMAT_DEPTH_24:
    case HAL_PIXEL_FORMAT_DEPTH_24_STENCIL_8:
    case HAL_PIXEL_FORMAT_DEPTH_32F:
       bpp = 4;
       break;
    case HAL_PIXEL_FORMAT_RGB_565:
+   case HAL_PIXEL_FORMAT_RG_88:
+   case HAL_PIXEL_FORMAT_R16_UINT:
    case HAL_PIXEL_FORMAT_DEPTH_16:
       bpp = 2;
       break;
+   case HAL_PIXEL_FORMAT_R_8:
+   case HAL_PIXEL_FORMAT_Y8:
+   case HAL_PIXEL_FORMAT_R8_UNORM:
    case HAL_PIXEL_FORMAT_STENCIL_8:
       bpp = 1;
       break;
@@ -126,10 +225,26 @@ get_fourcc_from_hal_format(int native)
        */
    case HAL_PIXEL_FORMAT_RGBX_8888:
       return DRM_FORMAT_XBGR8888;
+   case HAL_PIXEL_FORMAT_BGRX_8888:
+      return DRM_FORMAT_XRGB8888;
    case HAL_PIXEL_FORMAT_RGBA_FP16:
       return DRM_FORMAT_ABGR16161616F;
    case HAL_PIXEL_FORMAT_RGBA_1010102:
       return DRM_FORMAT_ABGR2101010;
+   case HAL_PIXEL_FORMAT_RGBX_1010102:
+      return DRM_FORMAT_XBGR2101010;
+   case HAL_PIXEL_FORMAT_BGRA_1010102:
+      return DRM_FORMAT_ARGB2101010;
+   case HAL_PIXEL_FORMAT_R_8:
+   case HAL_PIXEL_FORMAT_Y8:
+   case HAL_PIXEL_FORMAT_R8_UNORM:
+      return DRM_FORMAT_R8;
+   case HAL_PIXEL_FORMAT_RG_88:
+      return DRM_FORMAT_RG88;
+   case HAL_PIXEL_FORMAT_R16_UINT:
+      return DRM_FORMAT_R16;
+   case HAL_PIXEL_FORMAT_R16G16_UINT:
+      return DRM_FORMAT_RG1616;
    /* DRM has no fourcc for depth/stencil; map to size-equivalent single/
     * dual-channel placeholders so AHB import flows can proceed.  Drivers
     * resolve the real format from the VkImage create info, not from this
@@ -177,7 +292,21 @@ bufferinfo_from_ycbcr(const struct android_ycbcr *ycbcr,
 
    out->drm_fourcc = drm_fourcc;
 
-   out->num_planes = ycbcr->chroma_step == 2 ? 2 : 3;
+   switch (drm_fourcc) {
+   case DRM_FORMAT_NV12:
+   case DRM_FORMAT_NV21:
+   case DRM_FORMAT_P010:
+   case DRM_FORMAT_NV15:
+      out->num_planes = 2;
+      break;
+   case DRM_FORMAT_AYUV:
+   case DRM_FORMAT_XYUV8888:
+      out->num_planes = 1;
+      break;
+   default:
+      out->num_planes = ycbcr->chroma_step == 2 ? 2 : 3;
+      break;
+   }
    /* When lock_ycbcr's usage argument contains no SW_READ/WRITE flags
     * it will return the .y/.cb/.cr pointers based on a NULL pointer,
     * so they can be interpreted as offsets. */

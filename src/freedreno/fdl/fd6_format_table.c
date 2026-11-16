@@ -385,6 +385,7 @@ static const struct fd6_format formats[PIPE_FORMAT_COUNT] = {
    _TC(YUYV, R8G8R8B8_422_UNORM, WZYX),
    _T_(R8_G8B8_420_UNORM, R8_G8B8_2PLANE_420_UNORM, WZYX), /* Gallium NV12 */
    _T_(G8_B8R8_420_UNORM, R8_G8B8_2PLANE_420_UNORM, WZYX), /* Vulkan NV12 */
+   _T_(X6G10_X6B10X6R10_420_UNORM, P010, WZYX),           /* Vulkan P010/TP10 */
    _T_(G8_B8_R8_420_UNORM, R8_G8_B8_3PLANE_420_UNORM, WZYX),
 };
 /* clang-format on */

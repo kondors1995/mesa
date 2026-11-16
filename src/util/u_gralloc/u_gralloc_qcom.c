@@ -42,8 +42,16 @@ static const char caf_gralloc_author[] = "Code Aurora Forum";
 #define QCOM_GRALLOC_PROBE_FORMAT 1 /* HAL_PIXEL_FORMAT_RGBA_8888 */
 
 #define GRALLOC_MODULE_PERFORM_GET_STRIDE 2
+#define GRALLOC_MODULE_PERFORM_GET_COLOR_SPACE_FROM_HANDLE 6
 #define GRALLOC_MODULE_PERFORM_GET_YUV_PLANE_INFO 7
 #define GRALLOC_MODULE_PERFORM_GET_UBWC_FLAG 9
+
+#define HAL_CSC_ITU_R_601 0
+#define HAL_CSC_ITU_R_601_FR 1
+#define HAL_CSC_ITU_R_709 2
+#define HAL_CSC_ITU_R_2020 3
+#define HAL_CSC_ITU_R_2020_FR 4
+#define HAL_CSC_ITU_R_709_FR 5
 
 static int
 fallback_gralloc_get_yuv_info(struct u_gralloc *gralloc,
@@ -71,6 +79,15 @@ fallback_gralloc_get_yuv_info(struct u_gralloc *gralloc,
    ret = bufferinfo_from_ycbcr(&ycbcr, hnd, out);
    if (ret)
       return ret;
+
+   /* QCOM gralloc returns pointers offset by hnd->base (if mapped) plus, for
+    * UBWC, the leading metadata size. Normalize relative to plane 0.
+    */
+   uint64_t base_y = out->offsets[0];
+   out->offsets[0] = 0;
+   out->offsets[1] -= base_y;
+   if (out->num_planes == 3)
+      out->offsets[2] -= base_y;
 
    out->fds[1] = out->fds[0] = hnd->handle->data[0];
    if (out->num_planes == 3)
@@ -130,6 +147,58 @@ get_buffer_info(struct u_gralloc *gralloc,
    out->num_planes = 1;
    out->fds[0] = hnd->handle->data[0];
    out->strides[0] = stride;
+
+   return 0;
+}
+
+static int
+qcom_get_buffer_color_info(struct u_gralloc *gralloc,
+                           struct u_gralloc_buffer_handle *hnd,
+                           struct u_gralloc_buffer_color_info *out)
+{
+   struct qcom_gralloc *gr = (struct qcom_gralloc *)gralloc;
+   int color_space = 0;
+
+   *out = (struct u_gralloc_buffer_color_info){
+      .yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC601,
+      .sample_range = __DRI_YUV_NARROW_RANGE,
+      .horizontal_siting = __DRI_YUV_CHROMA_SITING_0_5,
+      .vertical_siting = __DRI_YUV_CHROMA_SITING_0_5,
+   };
+
+   if (gr->perform(gr->perform_handle,
+                   GRALLOC_MODULE_PERFORM_GET_COLOR_SPACE_FROM_HANDLE,
+                   hnd->handle, &color_space) != 0)
+      return 0;
+
+   switch (color_space) {
+   case HAL_CSC_ITU_R_601:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC601;
+      out->sample_range = __DRI_YUV_NARROW_RANGE;
+      break;
+   case HAL_CSC_ITU_R_601_FR:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC601;
+      out->sample_range = __DRI_YUV_FULL_RANGE;
+      break;
+   case HAL_CSC_ITU_R_709:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC709;
+      out->sample_range = __DRI_YUV_NARROW_RANGE;
+      break;
+   case HAL_CSC_ITU_R_709_FR:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC709;
+      out->sample_range = __DRI_YUV_FULL_RANGE;
+      break;
+   case HAL_CSC_ITU_R_2020:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC2020;
+      out->sample_range = __DRI_YUV_NARROW_RANGE;
+      break;
+   case HAL_CSC_ITU_R_2020_FR:
+      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC2020;
+      out->sample_range = __DRI_YUV_FULL_RANGE;
+      break;
+   default:
+      break;
+   }
 
    return 0;
 }
@@ -212,6 +281,7 @@ u_gralloc_qcom_create()
       goto fail;
 
    gr->base.ops.get_buffer_basic_info = get_buffer_info;
+   gr->base.ops.get_buffer_color_info = qcom_get_buffer_color_info;
    gr->base.ops.destroy = destroy;
 
    mesa_logi("Using QCOM gralloc (aosp/hardware/qcom/display/*/libgralloc). ");

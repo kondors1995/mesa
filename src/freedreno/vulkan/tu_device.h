@@ -490,6 +490,10 @@ struct tu_device
    struct list_head copy_timestamp_cs_pool;
    mtx_t copy_timestamp_cs_pool_mutex;
 
+   struct list_head yuv_repack_images;
+   mtx_t yuv_repack_mutex;
+   uint64_t next_yuv_repack_id;
+
    #ifdef HAVE_PERFETTO
    struct tu_perfetto_state perfetto;
    #endif

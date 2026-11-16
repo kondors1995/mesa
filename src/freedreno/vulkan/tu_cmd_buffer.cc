@@ -716,8 +716,8 @@ emit_vpc_attr_buf(struct tu_cs *cs, struct tu_device *dev, bool gmem)
 }
 
 template <chip CHIP>
-static void
-emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
+void
+tu_emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
 {
    if (CHIP == A5XX) {
       tu5_emit_rb_ccu_cntl(cs, dev->physical_device, gmem);
@@ -792,6 +792,7 @@ emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
       ));
    }
 }
+TU_GENX(tu_emit_rb_ccu_cntl);
 
 /* Cache flushes for things that use the color/depth read/write path (i.e.
  * blits and draws). This deals with changing CCU state as well as the usual
@@ -837,8 +838,8 @@ tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
    tu_emit_cache_flush<CHIP>(cmd_buffer);
 
    if (ccu_state != cmd_buffer->state.ccu_state) {
-      emit_rb_ccu_cntl<CHIP>(cs, cmd_buffer->device,
-                             ccu_state == TU_CMD_CCU_GMEM);
+      tu_emit_rb_ccu_cntl<CHIP>(cs, cmd_buffer->device,
+                                ccu_state == TU_CMD_CCU_GMEM);
       if (cmd_buffer->device->physical_device->info->props.has_gmem_vpc_attr_buf) {
          tu7_thread_control(cs, CP_SET_THREAD_BOTH);
 
@@ -2576,7 +2577,7 @@ tu_emit_bin_preamble(struct tu_device *dev, struct tu_cs *cs, bool bv)
    tu6_init_static_regs<CHIP>(dev, cs);
 
    if (!bv)
-      emit_rb_ccu_cntl<CHIP>(cs, dev, true);
+      tu_emit_rb_ccu_cntl<CHIP>(cs, dev, true);
    emit_vpc_attr_buf<CHIP>(cs, dev, true);
 
    if (CHIP >= A7XX && !bv) {
@@ -2698,7 +2699,7 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu6_init_static_regs<CHIP>(cmd->device, cs);
    tu_init_hw_rp<CHIP>(cs);
 
-   emit_rb_ccu_cntl<CHIP>(cs, cmd->device, false);
+   tu_emit_rb_ccu_cntl<CHIP>(cs, cmd->device, false);
    emit_vpc_attr_buf<CHIP>(cs, cmd->device, false);
    cmd->state.ccu_state = TU_CMD_CCU_SYSMEM;
 
@@ -4561,7 +4562,11 @@ tu_cmd_buffer_destroy(struct vk_command_buffer *vk_cmd_buffer)
                                         &cmd_buffer->descriptors[i].push_set.layout->vk);
       vk_free(&cmd_buffer->device->vk.alloc,
               cmd_buffer->descriptors[i].push_set.mapped_ptr);
+      util_dynarray_fini(&cmd_buffer->descriptors[i].push_set.yuv_repack_ids);
    }
+
+   util_dynarray_fini(&cmd_buffer->yuv_repack_ids);
+   util_dynarray_fini(&cmd_buffer->repacked_in_barrier_ids);
 
    util_dynarray_foreach (&cmd_buffer->msrtss_color_temporaries,
                           struct tu_device_memory *, mem) {
@@ -4639,11 +4644,15 @@ tu_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
                                         &cmd_buffer->descriptors[i].push_set.layout->vk);
       }
       vk_free(&cmd_buffer->device->vk.alloc, cmd_buffer->descriptors[i].push_set.mapped_ptr);
+      util_dynarray_fini(&cmd_buffer->descriptors[i].push_set.yuv_repack_ids);
       memset(&cmd_buffer->descriptors[i].push_set, 0, sizeof(cmd_buffer->descriptors[i].push_set));
       cmd_buffer->descriptors[i].push_set.base.type = VK_OBJECT_TYPE_DESCRIPTOR_SET;
       cmd_buffer->descriptors[i].max_sets_bound = 0;
       cmd_buffer->descriptors[i].max_dynamic_offset_size = 0;
    }
+
+   util_dynarray_clear(&cmd_buffer->yuv_repack_ids);
+   util_dynarray_clear(&cmd_buffer->repacked_in_barrier_ids);
 
    util_dynarray_foreach (&cmd_buffer->msrtss_color_temporaries,
                           struct tu_device_memory *, mem) {
@@ -5173,6 +5182,11 @@ tu_bind_descriptor_sets(struct tu_cmd_buffer *cmd,
       if (!set)
          continue;
 
+      util_dynarray_foreach (&set->yuv_repack_ids, uint64_t, id) {
+         if (!tu_dynarray_contains_u64(&cmd->repacked_in_barrier_ids, *id))
+            tu_dynarray_add_unique_u64(&cmd->yuv_repack_ids, *id);
+      }
+
       if (set->layout->has_inline_uniforms)
          cmd->state.dirty |= TU_CMD_DIRTY_SHADER_CONSTS;
 
@@ -5481,6 +5495,7 @@ tu_push_descriptor_set(struct tu_cmd_buffer *cmd,
       return;
    }
 
+   util_dynarray_clear(&set->yuv_repack_ids);
    tu_update_descriptor_sets<CHIP>(cmd->device, tu_descriptor_set_to_handle(set),
                                    info->descriptorWriteCount,
                                    info->pDescriptorWrites, 0, NULL);
@@ -5547,6 +5562,7 @@ tu_CmdPushDescriptorSetWithTemplate2KHR(
       return;
    }
 
+   util_dynarray_clear(&set->yuv_repack_ids);
    tu_update_descriptor_set_with_template<CHIP>(
       cmd->device, set,
       pPushDescriptorSetWithTemplateInfo->descriptorUpdateTemplate,
@@ -6837,6 +6853,11 @@ tu_CmdExecuteCommands(VkCommandBuffer commandBuffer,
 
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       VK_FROM_HANDLE(tu_cmd_buffer, secondary, pCmdBuffers[i]);
+
+      util_dynarray_foreach (&secondary->yuv_repack_ids, uint64_t, id) {
+         if (!tu_dynarray_contains_u64(&cmd->repacked_in_barrier_ids, *id))
+            tu_dynarray_add_unique_u64(&cmd->yuv_repack_ids, *id);
+      }
 
 #ifdef HAVE_PERFETTO
       /* Propagate viewport/scissor state so that we can emit the correct
@@ -10885,6 +10906,29 @@ tu_barrier(struct tu_cmd_buffer *cmd,
    VkPipelineStageFlags2 dstStage = 0;
    BITMASK_ENUM(tu_cmd_access_mask) src_flags = 0;
    BITMASK_ENUM(tu_cmd_access_mask) dst_flags = 0;
+
+   if (!cmd->state.pass) {
+      for (uint32_t dep_idx = 0; dep_idx < dep_count; dep_idx++) {
+         const VkDependencyInfo *dep_info = &dep_infos[dep_idx];
+         for (uint32_t i = 0; i < dep_info->imageMemoryBarrierCount; i++) {
+            const VkImageMemoryBarrier2 *barrier =
+               &dep_info->pImageMemoryBarriers[i];
+            VK_FROM_HANDLE(tu_image, image, barrier->image);
+            if (!image->has_yuv_repack)
+               continue;
+            if (barrier->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                barrier->oldLayout == VK_IMAGE_LAYOUT_PREINITIALIZED ||
+                barrier->srcQueueFamilyIndex == VK_QUEUE_FAMILY_FOREIGN_EXT ||
+                barrier->srcQueueFamilyIndex == VK_QUEUE_FAMILY_EXTERNAL) {
+               TU_CALLX(cmd->device, tu_repack_yuv_image)(cmd, image);
+               tu_dynarray_add_unique_u64(&cmd->repacked_in_barrier_ids,
+                                          image->yuv_repack_id);
+               src_flags |= TU_ACCESS_CCU_COLOR_INCOHERENT_WRITE;
+               srcStage |= VK_PIPELINE_STAGE_2_COPY_BIT;
+            }
+         }
+      }
+   }
 
    /* Inside a renderpass, we don't know yet whether we'll be using sysmem
     * so we have to use the sysmem flushes.

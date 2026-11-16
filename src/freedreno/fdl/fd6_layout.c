@@ -36,6 +36,17 @@ fdl6_get_ubwc_blockwidth(const struct fdl_layout *layout,
 
    unsigned num_planes = util_format_get_num_planes(layout->format);
 
+   if (layout->tp10) {
+      if (layout->plane == 1) {
+         *blockwidth = 24;
+         *blockheight = 4;
+      } else {
+         *blockwidth = 48;
+         *blockheight = 4;
+      }
+      return;
+   }
+
    /* special case for r8g8 and UV plane (plane 1) of 2-plane YUV formats */
    if (fdl6_is_r8g8_layout(layout) || (num_planes == 2 && layout->plane == 1)) {
       *blockwidth = 16;
@@ -78,6 +89,13 @@ fdl6_get_ubwc_blockwidth(const struct fdl_layout *layout,
 static void
 fdl6_tile_alignment(struct fdl_layout *layout, uint32_t *heightalign)
 {
+   if (layout->tp10) {
+      layout->pitchalign = 2; /* 2 + 6 = 8 -> 256B aligned for both Y and UV */
+      *heightalign = 16;
+      layout->base_align = 4096;
+      return;
+   }
+
    layout->pitchalign = fdl_cpp_shift(layout);
    *heightalign = 16;
 
@@ -112,9 +130,16 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
    layout->depth0 = params->depth0;
    layout->mip_levels = params->mip_levels;
 
-   layout->cpp = util_format_get_blocksize(params->format);
-   layout->cpp *= params->nr_samples;
-   layout->cpp_shift = ffs(layout->cpp) - 1;
+   if (params->tp10) {
+      assert(params->plane < 2);
+      layout->tp10 = true;
+      layout->cpp = (params->plane == 0 ? 4 : 8) * params->nr_samples;
+      layout->cpp_shift = ffs(layout->cpp) - 1;
+   } else {
+      layout->cpp = util_format_get_blocksize(params->format);
+      layout->cpp *= params->nr_samples;
+      layout->cpp_shift = ffs(layout->cpp) - 1;
+   }
 
    layout->format = params->format;
    layout->nr_samples = params->nr_samples;
@@ -133,9 +158,14 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
    } else {
       fdl6_get_ubwc_blockwidth(layout, &ubwc_blockwidth, &ubwc_blockheight);
 
-      fdl_get_sparse_block_size(params->format, params->nr_samples,
-                                &sparse_blockwidth, &sparse_blockheight);
-      assert(sparse_blocksize == sparse_blockwidth * sparse_blockheight * layout->cpp);
+      if (!params->tp10) {
+         fdl_get_sparse_block_size(params->format, params->nr_samples,
+                                   &sparse_blockwidth, &sparse_blockheight);
+         assert(sparse_blocksize == sparse_blockwidth * sparse_blockheight * layout->cpp);
+      } else {
+         assert(!params->sparse);
+         sparse_blockwidth = sparse_blockheight = 0;
+      }
 
       /* For simplicity support UBWC only for 3D images without mipmaps,
        * most d3d11 games don't use mipmaps for 3D images.
@@ -213,7 +243,8 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
       heightalign = 1;
    }
 
-   fdl_set_pitchalign(layout, layout->pitchalign + 6);
+   if (!explicit_layout || layout->tile_mode || params->plane == 0)
+      fdl_set_pitchalign(layout, layout->pitchalign + 6);
 
    if (explicit_layout) {
       layout->explicit_layout = true;
@@ -260,7 +291,9 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
       uint32_t width = u_minify(params->width0, level);
       uint32_t height = u_minify(params->height0, level);
 
-      uint32_t nblocksx = util_format_get_nblocksx(params->format, width);
+      uint32_t nblocksx = layout->tp10
+         ? DIV_ROUND_UP(width, 3)
+         : util_format_get_nblocksx(params->format, width);
       uint32_t nblocksy = util_format_get_nblocksy(params->format, height);
 
       /* Follow the Vulkan requirements for when the miptail begins. */

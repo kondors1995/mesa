@@ -2874,6 +2874,7 @@ tu_device_destroy_mutexes(struct tu_device *device)
    mtx_destroy(&device->vis_stream_suballocator_mtx);
    mtx_destroy(&device->mutex);
    mtx_destroy(&device->copy_timestamp_cs_pool_mutex);
+   mtx_destroy(&device->yuv_repack_mutex);
    mtx_destroy(&device->softfloat_mutex);
    for (unsigned i = 0; i < ARRAY_SIZE(device->scratch_bos); i++)
       mtx_destroy(&device->scratch_bos[i].construct_mtx);
@@ -2999,6 +3000,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    mtx_init(&device->vis_stream_suballocator_mtx, mtx_plain);
    mtx_init(&device->mutex, mtx_plain);
    mtx_init(&device->copy_timestamp_cs_pool_mutex, mtx_plain);
+   mtx_init(&device->yuv_repack_mutex, mtx_plain);
    mtx_init(&device->softfloat_mutex, mtx_plain);
 #ifdef HAVE_PERFETTO
    tu_perfetto_init_state(&device->perfetto);
@@ -3320,6 +3322,8 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
 
    device->submit_count = 0;
    list_inithead(&device->copy_timestamp_cs_pool);
+   list_inithead(&device->yuv_repack_images);
+   device->next_yuv_repack_id = 0;
    u_trace_context_init(&device->trace_context, device,
                      sizeof(uint64_t),
                      12,
@@ -3932,6 +3936,15 @@ tu_AllocateMemory(VkDevice _device,
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
    if (mem->vk.ahardware_buffer && mem->image &&
        vk_image_is_android_hardware_buffer(&mem->image->vk)) {
+      AHardwareBuffer_Desc ahb_desc;
+      AHardwareBuffer_describe(mem->vk.ahardware_buffer, &ahb_desc);
+      if (ahb_desc.format == 0x7FA30C09 /* HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC */)
+         mem->image->is_tp10 = true;
+      else if (ahb_desc.format == 0x11 || ahb_desc.format == 0x113 ||
+               ahb_desc.format == 0x114 || ahb_desc.format == 0x7FA30C00 ||
+               ahb_desc.format == 0x7FA30C01)
+         mem->image->is_nv21 = true;
+
       VkImageDrmFormatModifierExplicitCreateInfoEXT eci;
       VkSubresourceLayout a_plane_layouts[TU_MAX_PLANE_COUNT];
       result = vk_android_get_ahb_layout(mem->vk.ahardware_buffer, &eci,

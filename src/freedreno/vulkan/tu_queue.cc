@@ -481,6 +481,29 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
          device, cmd_buffers, cmdbuf_count, &u_trace_submission_data);
    }
 
+   {
+      struct util_dynarray repack_ids = UTIL_DYNARRAY_INIT;
+      for (uint32_t i = 0; i < cmdbuf_count; i++) {
+         util_dynarray_foreach (&cmd_buffers[i]->yuv_repack_ids, uint64_t, id) {
+            tu_dynarray_add_unique_u64(&repack_ids, *id);
+         }
+      }
+      if (repack_ids.size > 0) {
+         mtx_lock(&device->yuv_repack_mutex);
+         list_for_each_entry (struct tu_image, img, &device->yuv_repack_images,
+                              yuv_repack_link) {
+            if (img->repack_cs_initialized &&
+                tu_dynarray_contains_u64(&repack_ids, img->yuv_repack_id)) {
+               submit_add_entries(device, submit, &dump_cmds,
+                                  img->repack_cs.entries,
+                                  img->repack_cs.entry_count);
+            }
+         }
+         mtx_unlock(&device->yuv_repack_mutex);
+      }
+      util_dynarray_fini(&repack_ids);
+   }
+
    for (uint32_t i = 0; i < cmdbuf_count; i++) {
       struct tu_cmd_buffer *cmd_buffer = cmd_buffers[i];
       struct tu_cs *cs = &cmd_buffer->cs;

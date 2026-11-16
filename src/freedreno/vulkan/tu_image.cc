@@ -25,6 +25,7 @@
 #include "fdl/fd6_format_table.h"
 #include "fdl/freedreno_layout.h"
 #include "tu_buffer.h"
+#include "tu_clear_blit.h"
 #include "tu_cs.h"
 #include "tu_descriptor_set.h"
 #include "tu_device.h"
@@ -60,6 +61,9 @@ tu6_plane_format(VkFormat format, uint32_t plane)
    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
       /* The 0'th plane of this format has a different UBWC compression */
       return !plane ? PIPE_FORMAT_Y8_UNORM : PIPE_FORMAT_R8G8_UNORM;
+
+   case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16:
+      return !plane ? PIPE_FORMAT_R16_UNORM : PIPE_FORMAT_R16G16_UNORM;
 
    default:
       return vk_format_to_pipe_format(vk_format_get_plane_format(format, plane));
@@ -225,6 +229,19 @@ tu_image_view_init(struct tu_device *device,
 
    struct fdl_view_args args = {};
    args.iova = image->iova;
+   if (image->has_yuv_repack && image->repack_bo) {
+      if (aspect_mask == VK_IMAGE_ASPECT_COLOR_BIT &&
+          vk_format_get_plane_count(iview->vk.format) > 1) {
+         for (uint32_t k = 0; k < 3; k++) {
+            if (image->yuv_repack[k].needed)
+               args.plane_iova[k] = image->repack_bo->iova;
+         }
+      } else {
+         uint32_t pidx = tu6_plane_index(image->vk.format, aspect_mask);
+         if (image->yuv_repack[pidx].needed)
+            args.iova = image->repack_bo->iova;
+      }
+   }
    args.base_array_layer = range->baseArrayLayer;
    args.base_miplevel = range->baseMipLevel;
    args.layer_count = vk_image_subresource_layer_count(&image->vk, range);
@@ -244,6 +261,9 @@ tu_image_view_init(struct tu_device *device,
       };
       vk_component_mapping_to_pipe_swizzle(component, conversion_swiz);
       util_format_compose_swizzles(create_swiz, conversion_swiz, args.swiz);
+   }
+   if (image->is_nv21 && aspect_mask == VK_IMAGE_ASPECT_COLOR_BIT) {
+      std::swap(args.swiz[0], args.swiz[2]);
    }
 
    switch (pCreateInfo->viewType) {
@@ -627,11 +647,12 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
                                                    fmt_list)) {
          bool mutable_ubwc_fc = device->physical_device->info->props.ubwc_all_formats_compatible;
 
-         /* NV12 uses a special compression scheme for the Y channel which
+         /* NV12/P010/TP10 use a special compression scheme which
           * doesn't support reinterpretation. We have to fall back to linear
           * always.
           */
-         if (pCreateInfo->format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM) {
+         if (pCreateInfo->format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ||
+             pCreateInfo->format == VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16) {
             if (ubwc_enabled) {
                perf_debug(
                   device,
@@ -739,7 +760,8 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
     */
    bool force_ubwc = false;
    if (modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED) {
-      assert(!force_linear_tile);
+      force_linear_tile = false;
+      tile_mode = TILE6_3;
       ubwc_enabled = true;
       force_ubwc = true;
    }
@@ -758,9 +780,32 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
    assert(!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) ||
           tile_mode == TILE6_3);
 
+   if (image->is_tp10 &&
+       (CHIP == A5XX ||
+        modifier != DRM_FORMAT_MOD_QCOM_COMPRESSED ||
+        image->vk.format != VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16))
+      return vk_error(device, VK_ERROR_FORMAT_NOT_SUPPORTED);
+
    uint32_t plane_count = tu6_plane_count(image->vk.format);
+   bool need_plane_repack[3] = {};
+   if (CHIP != A5XX && CHIP < A7XX && tile_mode == TILE6_LINEAR &&
+       plane_layouts && plane_count > 1 && image->vk.mip_levels == 1 &&
+       image->vk.extent.depth == 1 && image->vk.array_layers == 1) {
+      for (uint32_t p = 0; p < plane_count && p < 3; p++) {
+         if (plane_layouts[p].rowPitch & 63)
+            need_plane_repack[p] = true;
+      }
+      if (plane_count == 3 && (need_plane_repack[1] || need_plane_repack[2])) {
+         need_plane_repack[1] = true;
+         need_plane_repack[2] = true;
+      }
+   }
+
 relayout_planes:
    image->total_size = 0;
+   image->has_yuv_repack = false;
+   image->repack_size = 0;
+   memset(image->yuv_repack, 0, sizeof(image->yuv_repack));
    memset(image->layout, 0, sizeof(image->layout));
    for (uint32_t i = 0; i < plane_count; i++) {
       struct fdl_layout *layout = &image->layout[i];
@@ -792,6 +837,17 @@ relayout_planes:
 
          plane_layout.offset = plane_layouts[i].offset;
          plane_layout.pitch = plane_layouts[i].rowPitch;
+         if (i < 3 && need_plane_repack[i]) {
+            image->has_yuv_repack = true;
+            image->yuv_repack[i].needed = true;
+            image->yuv_repack[i].src_offset = plane_layouts[i].offset;
+            image->yuv_repack[i].src_pitch = plane_layouts[i].rowPitch;
+            uint64_t repack_pitch = plane_layouts[i].rowPitch;
+            if (plane_count == 3 && i >= 1)
+               repack_pitch = MAX2(plane_layouts[1].rowPitch, plane_layouts[2].rowPitch);
+            plane_layout.offset = align64(image->repack_size, 4096);
+            plane_layout.pitch = align64(repack_pitch, 64);
+         }
          /* arrayPitch is intentionally not consumed here. fdl6_layout_image
           * deterministically computes layer_size from the imported pitch,
           * format, and tiling mode. The per-layer stride is not an independent
@@ -823,6 +879,7 @@ relayout_planes:
          .sparse = image->vk.create_flags &
             VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT,
          .force_disable_linear_fallback = force_disable_linear_fallback,
+         .tp10 = image->is_tp10,
          .plane = i,
       };
 
@@ -868,7 +925,17 @@ relayout_planes:
          layout->size += offset;
       }
 
-      image->total_size = MAX2(image->total_size, layout->size);
+      if (i < 3 && image->yuv_repack[i].needed) {
+         if (layout->pitchalign < 6)
+            fdl_set_pitchalign(layout, 6);
+         image->repack_size = layout->size;
+         uint64_t src_end =
+            image->yuv_repack[i].src_offset +
+            (uint64_t)layout->height0 * image->yuv_repack[i].src_pitch;
+         image->total_size = MAX2(image->total_size, src_end);
+      } else {
+         image->total_size = MAX2(image->total_size, layout->size);
+      }
    }
 
    /* Multi-planar YUV views read one TILE_MODE and one FLAG bit from plane 0
@@ -960,6 +1027,13 @@ tu_android_get_wsi_memory(struct tu_device *dev,
 
    const VkNativeBufferANDROID *anb =
       vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
+
+   if (anb && anb->format == 0x7FA30C09 /* HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC */)
+      img->is_tp10 = true;
+   else if (anb && (anb->format == 0x11 || anb->format == 0x113 ||
+                    anb->format == 0x114 || anb->format == 0x7FA30C00 ||
+                    anb->format == 0x7FA30C01))
+      img->is_nv21 = true;
 
    /* Inject ANB into the deferred pNext chain to leverage the existing common
     * Android helper vk_android_get_anb_layout.
@@ -1181,6 +1255,18 @@ tu_DestroyImage(VkDevice _device,
       tu_sparse_vma_finish(device, &image->vma);
    }
 
+   if (image->yuv_repack_id) {
+      mtx_lock(&device->yuv_repack_mutex);
+      list_delinit(&image->yuv_repack_link);
+      mtx_unlock(&device->yuv_repack_mutex);
+   }
+
+   if (image->repack_cs_initialized)
+      tu_cs_finish(&image->repack_cs);
+
+   if (image->repack_bo)
+      tu_bo_finish(device, image->repack_bo);
+
    if (image->iova)
       vk_address_binding_report(&instance->vk, &image->vk.base,
                                 image->iova, image->total_size,
@@ -1224,6 +1310,22 @@ tu_image_bind(struct tu_device *device,
    image->mem = mem;
    image->mem_offset = offset;
    image->iova = mem->iova + offset;
+
+   if (image->has_yuv_repack && !image->repack_bo) {
+      result = tu_bo_init_new(device, &image->vk.base, &image->repack_bo,
+                              image->repack_size, TU_BO_ALLOC_NO_FLAGS,
+                              "yuv_repack");
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
+   if (image->has_yuv_repack && image->repack_bo && !image->yuv_repack_id) {
+      image->yuv_repack_id = p_atomic_inc_return(&device->next_yuv_repack_id);
+      TU_CALLX(device, tu_build_yuv_repack_cs)(device, image);
+      mtx_lock(&device->yuv_repack_mutex);
+      list_addtail(&image->yuv_repack_link, &device->yuv_repack_images);
+      mtx_unlock(&device->yuv_repack_mutex);
+   }
 
    if (tu_dbg_log_enabled()) {
       tu_dbg_log("BIND_IMG img=%p fmt=%s iova=0x%" PRIx64 " off=%" PRIu64 " total=%" PRIu64 " tile=%d",

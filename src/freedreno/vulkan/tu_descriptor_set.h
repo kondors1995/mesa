@@ -143,6 +143,8 @@ struct tu_descriptor_set
    uint32_t host_size;
 
    uint32_t *dynamic_descriptors;
+
+   struct util_dynarray yuv_repack_ids;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_descriptor_set, base, VkDescriptorSet,
                                VK_OBJECT_TYPE_DESCRIPTOR_SET)

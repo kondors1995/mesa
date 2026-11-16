@@ -797,6 +797,9 @@ struct tu_cmd_buffer
    struct util_dynarray msrtss_color_temporaries;
    struct util_dynarray msrtss_depth_temporaries;
 
+   struct util_dynarray yuv_repack_ids;
+   struct util_dynarray repacked_in_barrier_ids;
+
    uint32_t vsc_draw_strm_pitch;
    uint32_t vsc_prim_strm_pitch;
    uint32_t vsc_draw_strm_offset, vsc_draw_strm_size_offset;
@@ -853,6 +856,9 @@ tu_emit_cache_flush(struct tu_cmd_buffer *cmd_buffer);
 
 template <chip CHIP>
 void tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer);
+
+template <chip CHIP>
+void tu_emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem);
 
 template <chip CHIP>
 void tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,

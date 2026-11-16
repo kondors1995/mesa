@@ -492,4 +492,21 @@ tu_dbg_log(const char *fmt, ...);
 #define offsetof_arr(s, field, idx)                                          \
    (offsetof(s, field) + sizeof_field(s, field[0]) * (idx))
 
+static inline bool
+tu_dynarray_contains_u64(const struct util_dynarray *arr, uint64_t val)
+{
+   util_dynarray_foreach (arr, uint64_t, elem) {
+      if (*elem == val)
+         return true;
+   }
+   return false;
+}
+
+static inline void
+tu_dynarray_add_unique_u64(struct util_dynarray *arr, uint64_t val)
+{
+   if (val && !tu_dynarray_contains_u64(arr, val))
+      util_dynarray_append_typed(arr, uint64_t, val);
+}
+
 #endif /* TU_UTIL_H */
