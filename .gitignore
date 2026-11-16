@@ -11,3 +11,6 @@ android-aarch64.txt
 native.txt
 build.sh
 build-android-aarch64/
+build-linux-aarch64*/
+.sysroot-ubuntu*/
+out-deb/
