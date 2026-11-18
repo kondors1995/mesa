@@ -1469,11 +1469,16 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
                                                  TU5_MAX_TEX_BINDINGS, set, binding,
                                                  array_size, false, is_ia, plane);
          tex->texture_index = base;
+         nir_def *tex_off = deref->arr.index.ssa;
+         if (base) {
+            b->cursor = nir_before_instr(&tex->instr);
+            tex_off = nir_iadd_imm(b, tex_off, base);
+         }
          int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
          if (off_idx >= 0)
-            nir_src_rewrite(&tex->src[off_idx].src, deref->arr.index.ssa);
+            nir_src_rewrite(&tex->src[off_idx].src, tex_off);
          else
-            nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, deref->arr.index.ssa);
+            nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, tex_off);
       }
 
       nir_tex_instr_remove_src(tex, nir_tex_instr_src_index(tex, nir_tex_src_texture_deref));
@@ -1524,11 +1529,16 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
             }
          }
          tex->sampler_index = base;
+         nir_def *samp_off = deref->arr.index.ssa;
+         if (base) {
+            b->cursor = nir_before_instr(&tex->instr);
+            samp_off = nir_iadd_imm(b, samp_off, base);
+         }
          int off_idx = nir_tex_instr_src_index(tex, nir_tex_src_sampler_offset);
          if (off_idx >= 0)
-            nir_src_rewrite(&tex->src[off_idx].src, deref->arr.index.ssa);
+            nir_src_rewrite(&tex->src[off_idx].src, samp_off);
          else
-            nir_tex_instr_add_src(tex, nir_tex_src_sampler_offset, deref->arr.index.ssa);
+            nir_tex_instr_add_src(tex, nir_tex_src_sampler_offset, samp_off);
       }
 
       nir_tex_instr_remove_src(tex, nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref));
