@@ -58,6 +58,11 @@ tu_emit_resolve_group(struct tu_cmd_buffer *cmd,
                            struct tu_cs *cs,
                            struct tu_resolve_group *resolve_group);
 
+bool
+tu5_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
+                            struct tu_cs *cs,
+                            uint32_t a);
+
 template <chip CHIP>
 void
 tu_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,

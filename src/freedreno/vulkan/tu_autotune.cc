@@ -273,7 +273,9 @@ tu_autotune::get_env_config()
    static std::once_flag once;
    static config_t at_config;
    std::call_once(once, [&] {
-      algorithm algo = algorithm::DEFAULT;
+      algorithm algo = device->physical_device->info->chip == 5
+                          ? algorithm::PREFER_SYSMEM
+                          : algorithm::DEFAULT;
       const char *algo_str = os_get_option("TU_AUTOTUNE_ALGO");
       std::string_view algo_strv;
 
