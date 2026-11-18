@@ -1054,13 +1054,21 @@ tu5_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
    const struct tu_render_pass_attachment *att =
       &cmd->state.pass->attachments[a];
    const struct tu_image_view *iview = cmd->state.attachments[a];
+   const struct tu_framebuffer *fb = cmd->state.framebuffer;
 
    if (!att->clear_mask)
       return true;
 
-   if (att->format == VK_FORMAT_D32_SFLOAT ||
-       att->format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
-       att->format == VK_FORMAT_S8_UINT ||
+   if (cmd->state.per_layer_render_area)
+      return false;
+
+   const VkRect2D *area = &cmd->state.render_areas[0];
+   if (area->offset.x != 0 || area->offset.y != 0 ||
+       area->extent.width != fb->width || area->extent.height != fb->height ||
+       area->extent.width == 0 || area->extent.height == 0)
+      return false;
+
+   if (vk_format_is_depth_or_stencil(att->format) ||
        att->format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)
       return false;
 
@@ -1070,6 +1078,13 @@ tu5_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
                             clear_vals);
 
    tu5_emit_blit_state(cs, 0, 0, att->samples, true);
+   tu5_emit_window_scissor(cs, 0, 0, area->extent.width - 1,
+                           area->extent.height - 1);
+
+   tu_cs_emit_pkt4(cs, REG_A5XX_VSC_RESOLVE_CNTL, 2);
+   tu_cs_emit(cs, A5XX_VSC_RESOLVE_CNTL_X(area->extent.width) |
+                  A5XX_VSC_RESOLVE_CNTL_Y(area->extent.height));
+   tu_cs_emit(cs, 0);
 
    bool is_zs = vk_format_is_depth_or_stencil(att->format);
    enum a5xx_depth_format dfmt = DEPTH5_NONE;
@@ -1087,16 +1102,7 @@ tu5_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
       tu_cs_emit(cs, A5XX_RB_BLIT_CNTL_BUF(BLIT_MRT0));
    }
 
-   for_each_layer (i, att->used_views, cmd->state.framebuffer->layers) {
-      const VkRect2D *area =
-         &cmd->state.render_areas[cmd->state.per_layer_render_area ? i : 0];
-      if (area->extent.width == 0 || area->extent.height == 0)
-         continue;
-
-      tu5_emit_resolve_scissor(cs, area->offset.x, area->offset.y,
-                               area->offset.x + area->extent.width - 1,
-                               area->offset.y + area->extent.height - 1);
-
+   for_each_layer (i, att->used_views, fb->layers) {
       if (is_zs) {
          tu5_emit_fast_clear_zs(cs, dfmt, tu_layer_address(&iview->view, i),
                                 iview->view.pitch, iview->view.layer_size);

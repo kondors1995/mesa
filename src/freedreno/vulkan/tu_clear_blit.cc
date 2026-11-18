@@ -5585,20 +5585,20 @@ tu_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
    if (!attachment->clear_mask)
       return;
 
-   if (CHIP == A5XX && tu5_clear_sysmem_attachment(cmd, cs, a)) {
-      /* nothing to do here now*/
-   } else if (attachment->format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
-      if (attachment->clear_mask & VK_IMAGE_ASPECT_DEPTH_BIT) {
-         clear_sysmem_attachment<CHIP>(cmd, cs, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                 a, true);
+   if (CHIP != A5XX || !tu5_clear_sysmem_attachment(cmd, cs, a)) {
+      if (attachment->format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+         if (attachment->clear_mask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+            clear_sysmem_attachment<CHIP>(cmd, cs, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                    a, true);
+         }
+         if (attachment->clear_mask & VK_IMAGE_ASPECT_STENCIL_BIT) {
+            clear_sysmem_attachment<CHIP>(cmd, cs, VK_FORMAT_S8_UINT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                    a, true);
+         }
+      } else {
+         clear_sysmem_attachment<CHIP>(cmd, cs, attachment->format, attachment->clear_mask,
+                                 a, false);
       }
-      if (attachment->clear_mask & VK_IMAGE_ASPECT_STENCIL_BIT) {
-         clear_sysmem_attachment<CHIP>(cmd, cs, VK_FORMAT_S8_UINT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                 a, true);
-      }
-   } else {
-      clear_sysmem_attachment<CHIP>(cmd, cs, attachment->format, attachment->clear_mask,
-                              a, false);
    }
 
    /* The spec doesn't explicitly say, but presumably the initial renderpass
