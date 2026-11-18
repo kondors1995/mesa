@@ -59,13 +59,13 @@ fallback_gralloc_get_yuv_info(struct u_gralloc *gralloc,
                               struct u_gralloc_buffer_basic_info *out)
 {
    struct qcom_gralloc *gr = (struct qcom_gralloc *)gralloc;
-   struct android_ycbcr ycbcr;
+   struct android_ycbcr ycbcr[2];
    int ret;
 
-   memset(&ycbcr, 0, sizeof(ycbcr));
+   memset(ycbcr, 0, sizeof(ycbcr));
    ret = gr->perform(gr->perform_handle,
                      GRALLOC_MODULE_PERFORM_GET_YUV_PLANE_INFO,
-                     hnd->handle, &ycbcr);
+                     hnd->handle, ycbcr);
    if (ret) {
       /* HACK: See native_window_buffer_get_buffer_info() and
        * https://issuetracker.google.com/32077885.*/
@@ -76,7 +76,7 @@ fallback_gralloc_get_yuv_info(struct u_gralloc *gralloc,
       return -EINVAL;
    }
 
-   ret = bufferinfo_from_ycbcr(&ycbcr, hnd, out);
+   ret = bufferinfo_from_ycbcr(&ycbcr[0], hnd, out);
    if (ret)
       return ret;
 
