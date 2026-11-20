@@ -744,7 +744,8 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
     * api.copy_and_blit.*.depth_stencil_msaa_copy.d24_unorm_s8_uint; also on
     * upstream 26.3.1). Drop this once the root cause is found.
     */
-   if (ubwc_enabled && pCreateInfo->samples > VK_SAMPLE_COUNT_1_BIT &&
+   if (ubwc_enabled && device->physical_device->info->chip == 6 &&
+       pCreateInfo->samples > VK_SAMPLE_COUNT_1_BIT &&
        image->vk.format == VK_FORMAT_D24_UNORM_S8_UINT) {
       perf_debug(device, "Disabling UBWC on MSAA D24S8 resource");
       ubwc_enabled = false;

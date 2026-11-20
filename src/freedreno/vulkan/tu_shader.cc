@@ -1401,6 +1401,11 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
       if (dyn_offset && array_size > 1) {
          struct tu5_binding_ref *tex_arr = shader->tu5_bindings->tex;
          uint8_t *ntex = &shader->tu5_bindings->num_tex;
+         if (*ntex + array_size > TU5_MAX_TEX_BINDINGS) {
+            mesa_loge("tu5: dynamic input attachment array does not fit the texture bindings");
+            assert(!"dynamic input attachment array too large");
+            array_size = MAX2(TU5_MAX_TEX_BINDINGS - *ntex, 1u);
+         }
          /* The array instruction addresses all elements from one base, so reuse
           * only a fully matching contiguous run, else append a fresh one.
           */
