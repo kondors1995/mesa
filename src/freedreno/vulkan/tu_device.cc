@@ -1361,9 +1361,14 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->optimalBufferCopyRowPitchAlignment = 128;
    props->nonCoherentAtomSize = 64;
 
+   /* A6xx can't meet the Vulkan 1.4 requirements (maxBoundDescriptorSets 7
+    * needs more than its 5 bindless sets, and subgroup operations in fragment
+    * shaders need getfiberid), so it reports 1.3 like upstream does. A5xx and
+    * A7xx+ keep reporting 1.4.
+    */
    props->apiVersion =
-      ((pdevice->info->chip >= 5) ? TU_API_VERSION :
-                                    VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION));
+      ((pdevice->info->chip == 6) ? VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION) :
+                                    TU_API_VERSION);
    props->driverVersion = vk_get_driver_version();
    props->vendorID = pdevice->instance->drirc.debug.force_vk_vendor != 0 ?
                      pdevice->instance->drirc.debug.force_vk_vendor : 0x5143;
