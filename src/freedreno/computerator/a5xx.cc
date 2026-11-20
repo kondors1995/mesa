@@ -266,7 +266,7 @@ cs_program_emit(struct fd_ringbuffer *ring, struct kernel *kernel)
                      A5XX_HLSQ_CS_CNTL_0_UNK0(INVALID_REG) |
                      A5XX_HLSQ_CS_CNTL_0_UNK1(INVALID_REG) |
                      A5XX_HLSQ_CS_CNTL_0_LOCALIDREGID(local_invocation_id));
-   OUT_RING(ring, A5XX_HLSQ_CS_CNTL_1_WORKITEMRASTORDER(WORKITEMRASTORDER_LINEAR));
+   OUT_RING(ring, A5XX_HLSQ_CS_CNTL_1_WORKITEMRASTORDER(A5XX_WORKITEMRASTORDER_LINEAR));
 
    if (instrlen > 0) {
       /* preload the shader into the instruction cache: */

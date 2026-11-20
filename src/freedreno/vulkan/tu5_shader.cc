@@ -681,13 +681,13 @@ tu5_emit_stream_out(struct tu_cs *cs,
                   COND(ncomp[1] > 0, A5XX_VPC_SO_BUF_CNTL_BUF1) |
                   COND(ncomp[2] > 0, A5XX_VPC_SO_BUF_CNTL_BUF2) |
                   COND(ncomp[3] > 0, A5XX_VPC_SO_BUF_CNTL_BUF3));
-   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(0));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_BUFFER_STRIDE(0));
    tu_cs_emit(cs, ncomp[0]);
-   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(1));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_BUFFER_STRIDE(1));
    tu_cs_emit(cs, ncomp[1]);
-   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(2));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_BUFFER_STRIDE(2));
    tu_cs_emit(cs, ncomp[2]);
-   tu_cs_emit(cs, REG_A5XX_VPC_SO_NCOMP(3));
+   tu_cs_emit(cs, REG_A5XX_VPC_SO_BUFFER_STRIDE(3));
    tu_cs_emit(cs, ncomp[3]);
    tu_cs_emit(cs, REG_A5XX_VPC_SO_CNTL);
    tu_cs_emit(cs, A5XX_VPC_SO_CNTL_ENABLE);

@@ -2734,7 +2734,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="LOCALIDREGID" low="24" high="31" type="a3xx_regid"/>
 	</reg32>
 	<enum name="a5xx_workitem_rast_order">
-		<value value="0x0" name="WORKITEMRASTORDER_LINEAR"/>
+		<value value="0x0" name="A5XX_WORKITEMRASTORDER_LINEAR"/>
 	</enum>
 	<reg32 offset="0xe7b8" name="HLSQ_CS_CNTL_1">
 		<bitfield name="WORKITEMRASTORDER" pos="0" type="a5xx_workitem_rast_order"/>
