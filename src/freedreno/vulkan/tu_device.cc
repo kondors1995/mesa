@@ -1233,7 +1233,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
    if (pdevice->info->chip == 5) {
       props->maxPerStageDescriptorSamplers = 16;
       props->maxPerStageDescriptorUniformBuffers = 15;
-      props->maxPerStageDescriptorStorageBuffers = 16;
+      props->maxPerStageDescriptorStorageBuffers = 8; /* SSBO + storage-image UAV slots must fit the 16-slot FS window (TU5_VS_UAV_BASE) */
       props->maxPerStageDescriptorSampledImages = 128;
       props->maxPerStageDescriptorStorageImages = 8;
       props->maxPerStageDescriptorInputAttachments = MAX_RTS;
