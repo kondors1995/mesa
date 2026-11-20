@@ -674,7 +674,7 @@ tu_dbg_log_refresh_locked(void)
          const char *path = os_get_option("TU_LOG_FILE");
          if (!path || !path[0])
             path = "/data/local/tmp/tu_debug.log";
-         tu_dbg_log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666);
+         tu_dbg_log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
          if (tu_dbg_log_fd < 0) {
             if (!tu_dbg_log_err_reported) {
                tu_dbg_log_err_reported = true;
