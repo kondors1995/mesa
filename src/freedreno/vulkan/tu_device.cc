@@ -334,6 +334,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_depth_clamp_control = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_control = true,
+      .EXT_device_fault = true,
       .EXT_depth_clip_enable = true,
       /* A5xx uses bindful SS4_DIRECT copy rather than bindless descriptors */
       .EXT_descriptor_buffer = !is_a5xx,
@@ -957,6 +958,10 @@ tu_get_features(struct tu_physical_device *pdevice,
 
    /* VK_QCOM_tile_properties */
    features->tileProperties = !is_a5xx;
+
+   /* VK_EXT_device_fault: the vendor binary is just the version one header */
+   features->deviceFaultEXT = true;
+   features->deviceFaultVendorBinaryEXT = true;
 
    /* VK_VALVE_fragment_density_map_layered */
    features->fragmentDensityMapLayered = !is_a5xx;
@@ -4502,6 +4507,79 @@ tu_setup_dynamic_framebuffer(struct tu_cmd_buffer *cmd_buffer,
    }
 
    tu_framebuffer_init_tiling_config(framebuffer, cmd_buffer->device, pass);
+}
+
+/* VK_EXT_device_fault. Turnip only learns that the kernel reported a fault or
+ * hang (see vk_device_set_lost() callers), not its address, so report one
+ * vendor info entry, no address infos, and a vendor binary that consists of
+ * the version one header only.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL
+tu_GetDeviceFaultInfoEXT(VkDevice _device,
+                         VkDeviceFaultCountsEXT *pFaultCounts,
+                         VkDeviceFaultInfoEXT *pFaultInfo)
+{
+   VK_FROM_HANDLE(tu_device, device, _device);
+   VkResult result = VK_SUCCESS;
+
+   if (!pFaultInfo) {
+      pFaultCounts->addressInfoCount = 0;
+      pFaultCounts->vendorInfoCount = 1;
+      pFaultCounts->vendorBinarySize =
+         sizeof(VkDeviceFaultVendorBinaryHeaderVersionOneEXT);
+      return VK_SUCCESS;
+   }
+
+   snprintf(pFaultInfo->description, sizeof(pFaultInfo->description),
+            "%s GPU fault or hang reported by the %s kernel driver",
+            device->physical_device->name,
+            is_kgsl(device->instance) ? "kgsl" : "msm");
+
+   pFaultCounts->addressInfoCount = 0;
+
+   if (pFaultInfo->pVendorInfos) {
+      if (pFaultCounts->vendorInfoCount >= 1) {
+         VkDeviceFaultVendorInfoEXT *info = &pFaultInfo->pVendorInfos[0];
+         memset(info, 0, sizeof(*info));
+         snprintf(info->description, sizeof(info->description),
+                  "kernel reported a GPU fault or hang; see the kernel log");
+         pFaultCounts->vendorInfoCount = 1;
+      } else {
+         result = VK_INCOMPLETE;
+      }
+   } else {
+      pFaultCounts->vendorInfoCount = 1;
+   }
+
+   if (pFaultInfo->pVendorBinaryData) {
+      const struct vk_app_info *app = &device->vk.base.instance->app_info;
+      VkDeviceFaultVendorBinaryHeaderVersionOneEXT header = {
+         .headerSize = sizeof(header),
+         .headerVersion = VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_EXT,
+         .vendorID = 0x5143,
+         .deviceID = device->physical_device->dev_id.chip_id,
+         .driverVersion = vk_get_driver_version(),
+         .applicationVersion = app->app_version,
+         .engineVersion = app->engine_version,
+         .apiVersion = app->api_version,
+      };
+      memcpy(header.pipelineCacheUUID, device->physical_device->cache_uuid,
+             VK_UUID_SIZE);
+
+      if (pFaultCounts->vendorBinarySize >= sizeof(header)) {
+         memcpy(pFaultInfo->pVendorBinaryData, &header, sizeof(header));
+         pFaultCounts->vendorBinarySize = sizeof(header);
+      } else {
+         memcpy(pFaultInfo->pVendorBinaryData, &header,
+                pFaultCounts->vendorBinarySize);
+         result = VK_INCOMPLETE;
+      }
+   } else {
+      pFaultCounts->vendorBinarySize =
+         sizeof(VkDeviceFaultVendorBinaryHeaderVersionOneEXT);
+   }
+
+   return result;
 }
 
 /* VK_QCOM_tile_properties: report the GMEM tile Turnip would use. When GMEM
