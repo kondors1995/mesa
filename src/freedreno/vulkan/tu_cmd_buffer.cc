@@ -1630,23 +1630,8 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       return true;
    }
 
-   /* shortcut: sysmem depth/stencil resolve hangs the GPU on A6xx (also seen
-    * on the base commit); GMEM resolves are fine. Drop this once the sysmem
-    * resolve path is fixed.
-    */
    tu_autotune::render_mode optimal_mode =
       cmd->device->autotune->get_optimal_mode(cmd, rp_ctx, rp_key);
-
-   if (optimal_mode == tu_autotune::render_mode::SYSMEM &&
-       cmd->device->physical_device->info->chip == 6) {
-      for (uint32_t i = 0; i < cmd->state.pass->subpass_count; i++) {
-         if (cmd->state.pass->subpasses[i].resolve_depth_stencil) {
-            cmd->state.rp.force_render_mode_reason =
-               "Sysmem depth/stencil resolve hangs on A6xx";
-            return false;
-         }
-      }
-   }
 
    return optimal_mode == tu_autotune::render_mode::SYSMEM;
 }
