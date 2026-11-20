@@ -140,6 +140,16 @@ tu_calc_frag_area(struct tu_cmd_buffer *cmd,
       width = 1u << util_logbase2(width);
       height = 1u << util_logbase2(height);
 
+      /* A fragment can't be larger than the area one density-map texel covers:
+       * 2^ceil(log2(floor(render size / density map size))) per axis.
+       */
+      if (fdm) {
+         unsigned ratio_x = MAX2(fb->width / MAX2(fdm->vk.extent.width, 1u), 1u);
+         unsigned ratio_y = MAX2(fb->height / MAX2(fdm->vk.extent.height, 1u), 1u);
+         width = MIN2(width, util_next_power_of_two(ratio_x));
+         height = MIN2(height, util_next_power_of_two(ratio_y));
+      }
+
       /* When FDM offset is enabled, the fragment area has to divide the
        * offset to make sure that we don't have tiles with partial fragments.
        * It would be bad to have the fragment area change as a function of the
