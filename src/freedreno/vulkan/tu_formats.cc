@@ -221,11 +221,12 @@ tu_physical_device_get_format_properties(
       }
 
       /* We sample on the CPU so we can technically support anything as long
-       * as it's floating point, but this restricts it to "reasonable" formats
-       * to use, which means two channels and not something weird like
-       * luminance-alpha.
+       * as it's floating point or normalized (R8G8_UNORM is required by the
+       * spec), but this restricts it to "reasonable" formats to use, which
+       * means two channels and not something weird like luminance-alpha.
        */
-      if (vk_format_is_float(vk_format) && desc->nr_channels == 2 &&
+      if ((vk_format_is_float(vk_format) || vk_format_is_unorm(vk_format)) &&
+          desc->nr_channels == 2 &&
           desc->swizzle[0] == PIPE_SWIZZLE_X &&
           desc->swizzle[1] == PIPE_SWIZZLE_Y) {
          optimal |= VK_FORMAT_FEATURE_2_FRAGMENT_DENSITY_MAP_BIT_EXT;
