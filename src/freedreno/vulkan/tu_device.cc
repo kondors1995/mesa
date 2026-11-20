@@ -382,6 +382,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_physical_device_drm = !is_kgsl(device->instance),
       .EXT_pipeline_creation_cache_control = true,
       .EXT_pipeline_creation_feedback = true,
+      .EXT_pipeline_robustness = true,
 #ifdef TU_USE_WSI_PLATFORM
       .EXT_present_timing = device->info->props.has_persistent_counter,
 #endif
