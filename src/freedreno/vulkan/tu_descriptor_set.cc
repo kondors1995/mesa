@@ -1192,7 +1192,14 @@ write_buffer_descriptor_addr(const struct tu_device *device,
        * 16-bit descriptor cannot be used for 32-bit loads through isam.v.
        */
       if (!info->props.storage_16bit || !info->props.has_isam_v) {
-         fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT, tu_swiz(X, Y, Z, W), va, range, 1, ssbo_emulation_mode);
+         /* Sub-dword accesses are lowered to 32-bit ones when 8/16-bit storage
+          * isn't native, and the descriptor size is in whole dwords, so round
+          * the range up or a trailing partial dword reads as out-of-bounds.
+          */
+         uint32_t range32 = range;
+         if (!info->props.storage_8bit || !info->props.storage_16bit)
+            range32 = (uint32_t)MIN2(((uint64_t)range + 3) & ~3ull, 0xfffffffcull);
+         fdl6_buffer_view_init<CHIP>(dst, PIPE_FORMAT_R32_UINT, tu_swiz(X, Y, Z, W), va, range32, 1, ssbo_emulation_mode);
          dst += FDL6_TEX_CONST_DWORDS;
       }
 
