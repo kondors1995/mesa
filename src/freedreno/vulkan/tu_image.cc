@@ -1046,11 +1046,9 @@ tu_android_get_wsi_memory(struct tu_device *dev,
    const VkNativeBufferANDROID *anb =
       vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
 
-   if (anb && anb->format == 0x7FA30C09 /* HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC */)
+   if (anb && tu_hal_format_is_tp10(anb->format))
       img->is_tp10 = true;
-   else if (anb && (anb->format == 0x11 || anb->format == 0x113 ||
-                    anb->format == 0x114 || anb->format == 0x7FA30C00 ||
-                    anb->format == 0x7FA30C01))
+   else if (anb && tu_hal_format_is_nv21(anb->format))
       img->is_nv21 = true;
 
    /* Inject ANB into the deferred pNext chain to leverage the existing common

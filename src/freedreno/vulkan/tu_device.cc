@@ -3947,11 +3947,9 @@ tu_AllocateMemory(VkDevice _device,
        vk_image_is_android_hardware_buffer(&mem->image->vk)) {
       AHardwareBuffer_Desc ahb_desc;
       AHardwareBuffer_describe(mem->vk.ahardware_buffer, &ahb_desc);
-      if (ahb_desc.format == 0x7FA30C09 /* HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC */)
+      if (tu_hal_format_is_tp10(ahb_desc.format))
          mem->image->is_tp10 = true;
-      else if (ahb_desc.format == 0x11 || ahb_desc.format == 0x113 ||
-               ahb_desc.format == 0x114 || ahb_desc.format == 0x7FA30C00 ||
-               ahb_desc.format == 0x7FA30C01)
+      else if (tu_hal_format_is_nv21(ahb_desc.format))
          mem->image->is_nv21 = true;
 
       VkImageDrmFormatModifierExplicitCreateInfoEXT eci;

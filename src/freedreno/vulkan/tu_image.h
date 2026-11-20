@@ -18,6 +18,25 @@
 
 #define TU_MAX_PLANE_COUNT 3
 
+/* Qualcomm/Android HAL pixel formats that need special handling. */
+#define TU_HAL_PIXEL_FORMAT_YCBCR_420_TP10_UBWC 0x7FA30C09
+
+static inline bool
+tu_hal_format_is_tp10(uint32_t f)
+{
+   return f == TU_HAL_PIXEL_FORMAT_YCBCR_420_TP10_UBWC;
+}
+
+/* VU-ordered (NV21-like) 4:2:0 formats: YCrCb_420_SP, NV21_ZSL, YCrCb_420_SP_VENUS,
+ * NV21_ENCODEABLE and YCrCb_420_SP_ADRENO.
+ */
+static inline bool
+tu_hal_format_is_nv21(uint32_t f)
+{
+   return f == 0x11 || f == 0x113 || f == 0x114 || f == 0x7FA30C00 ||
+          f == 0x7FA30C01;
+}
+
 struct tu_image
 {
    struct vk_image vk;
