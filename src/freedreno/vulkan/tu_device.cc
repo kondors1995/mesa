@@ -442,6 +442,7 @@ get_device_extensions(const struct tu_physical_device *device,
          device->info->props.has_per_view_viewport,
       .QCOM_render_pass_shader_resolve = !is_a5xx,
       .QCOM_render_pass_store_ops = true,
+      .QCOM_tile_properties = !is_a5xx,
       .QCOM_rotated_copy_commands = true,
       .VALVE_buffer_device_address_allocation_alignment =
          !is_a5xx && device->has_iova_align,
@@ -953,6 +954,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->textureSampleWeighted = pdevice->vk.supported_extensions.QCOM_image_processing;
    features->textureBoxFilter = pdevice->vk.supported_extensions.QCOM_image_processing;
    features->textureBlockMatch = pdevice->vk.supported_extensions.QCOM_image_processing;
+
+   /* VK_QCOM_tile_properties */
+   features->tileProperties = !is_a5xx;
 
    /* VK_VALVE_fragment_density_map_layered */
    features->fragmentDensityMapLayered = !is_a5xx;
@@ -4498,6 +4502,69 @@ tu_setup_dynamic_framebuffer(struct tu_cmd_buffer *cmd_buffer,
    }
 
    tu_framebuffer_init_tiling_config(framebuffer, cmd_buffer->device, pass);
+}
+
+/* VK_QCOM_tile_properties: report the GMEM tile Turnip would use. When GMEM
+ * rendering is not possible the whole render area is one "tile".
+ */
+static void
+tu_fill_tile_properties(const struct tu_framebuffer *fb,
+                        VkTilePropertiesQCOM *props)
+{
+   const struct tu_tiling_config *tiling = &fb->tiling[TU_GMEM_LAYOUT_FULL];
+   props->tileSize = (VkExtent3D) {
+      .width = tiling->possible ? tiling->tile0.width : fb->width,
+      .height = tiling->possible ? tiling->tile0.height : fb->height,
+      .depth = 1,
+   };
+   props->apronSize = (VkExtent2D) { 0, 0 };
+   props->origin = (VkOffset2D) { 0, 0 };
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+tu_GetFramebufferTilePropertiesQCOM(VkDevice device,
+                                    VkFramebuffer framebuffer,
+                                    uint32_t *pPropertiesCount,
+                                    VkTilePropertiesQCOM *pProperties)
+{
+   VK_FROM_HANDLE(tu_framebuffer, fb, framebuffer);
+
+   if (!pProperties) {
+      *pPropertiesCount = 1;
+      return VK_SUCCESS;
+   }
+
+   if (*pPropertiesCount == 0)
+      return VK_INCOMPLETE;
+
+   tu_fill_tile_properties(fb, &pProperties[0]);
+   *pPropertiesCount = 1;
+   return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+tu_GetDynamicRenderingTilePropertiesQCOM(VkDevice _device,
+                                         const VkRenderingInfo *pRenderingInfo,
+                                         VkTilePropertiesQCOM *pProperties)
+{
+   VK_FROM_HANDLE(tu_device, device, _device);
+
+   /* tu_setup_dynamic_render_pass() keeps its state inside a command buffer,
+    * so build the pass and framebuffer in a zeroed temporary one.
+    */
+   struct tu_cmd_buffer *cmd = (struct tu_cmd_buffer *)
+      vk_zalloc(&device->vk.alloc, sizeof(*cmd), 8,
+                VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   if (!cmd)
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   cmd->device = device;
+   tu_setup_dynamic_render_pass(cmd, pRenderingInfo);
+   tu_setup_dynamic_framebuffer(cmd, pRenderingInfo);
+   tu_fill_tile_properties(&cmd->dynamic_framebuffer, pProperties);
+
+   vk_free(&device->vk.alloc, cmd);
+   return VK_SUCCESS;
 }
 
 VkResult
