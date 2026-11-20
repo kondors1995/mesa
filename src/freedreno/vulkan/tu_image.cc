@@ -262,7 +262,15 @@ tu_image_view_init(struct tu_device *device,
       vk_component_mapping_to_pipe_swizzle(component, conversion_swiz);
       util_format_compose_swizzles(create_swiz, conversion_swiz, args.swiz);
    }
-   if (image->is_nv21 && aspect_mask == VK_IMAGE_ASPECT_COLOR_BIT) {
+   /* The AHB format properties already ask the app to swap R/B in the
+    * conversion for NV21; swap here only if the app did not, so the two never
+    * cancel out.
+    */
+   bool conversion_swapped_rb = conversion &&
+      conversion->state.mapping[0] == VK_COMPONENT_SWIZZLE_B &&
+      conversion->state.mapping[2] == VK_COMPONENT_SWIZZLE_R;
+   if (image->is_nv21 && aspect_mask == VK_IMAGE_ASPECT_COLOR_BIT &&
+       !conversion_swapped_rb) {
       std::swap(args.swiz[0], args.swiz[2]);
    }
 
