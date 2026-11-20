@@ -740,14 +740,17 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
       ubwc_enabled = false;
    }
 
-   /* shortcut: copies of MSAA D24S8 with UBWC lose the device on A6xx (CTS
-    * api.copy_and_blit.*.depth_stencil_msaa_copy.d24_unorm_s8_uint; also on
+   /* shortcut: copies and sysmem resolves of MSAA D24S8/X8D24/D16 with UBWC
+    * lose the device or corrupt on A6xx (CTS api.copy_and_blit.*.
+    * depth_stencil_msaa_copy and renderpass2.depth_stencil_resolve; also on
     * upstream 26.3.1). Drop this once the root cause is found.
     */
    if (ubwc_enabled && device->physical_device->info->chip == 6 &&
        pCreateInfo->samples > VK_SAMPLE_COUNT_1_BIT &&
-       image->vk.format == VK_FORMAT_D24_UNORM_S8_UINT) {
-      perf_debug(device, "Disabling UBWC on MSAA D24S8 resource");
+       (image->vk.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+        image->vk.format == VK_FORMAT_X8_D24_UNORM_PACK32 ||
+        image->vk.format == VK_FORMAT_D16_UNORM)) {
+      perf_debug(device, "Disabling UBWC on MSAA Z24/Z16 resource");
       ubwc_enabled = false;
    }
 
