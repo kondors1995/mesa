@@ -1390,15 +1390,40 @@ tu5_lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
       }
 
       if (dyn_offset && array_size > 1) {
-         uint32_t base = shader->tu5_bindings->num_tex;
+         struct tu5_binding_ref *tex_arr = shader->tu5_bindings->tex;
+         uint8_t *ntex = &shader->tu5_bindings->num_tex;
+         /* The array instruction addresses all elements from one base, so reuse
+          * only a fully matching contiguous run, else append a fresh one.
+          */
+         int32_t found = -1;
+         for (uint32_t i = 0; i + array_size <= *ntex && found < 0; i++) {
+            found = i;
+            for (uint32_t k = 0; k < array_size; k++) {
+               if (!tex_arr[i + k].is_dyn_ia ||
+                   tex_arr[i + k].is_ia_stencil != is_stencil ||
+                   tex_arr[i + k].binding != att_slot + k) {
+                  found = -1;
+                  break;
+               }
+            }
+         }
+         uint32_t base;
+         if (found >= 0) {
+            base = found;
+         } else {
+            assert(*ntex + array_size <= TU5_MAX_TEX_BINDINGS);
+            base = *ntex;
+            for (uint32_t k = 0; k < array_size && *ntex < TU5_MAX_TEX_BINDINGS; k++) {
+               tex_arr[(*ntex)++] = (struct tu5_binding_ref) {
+                  .set = 0,
+                  .is_input_attachment = true,
+                  .is_dyn_ia = true,
+                  .is_ia_stencil = is_stencil,
+                  .binding = (uint16_t)(att_slot + k),
+               };
+            }
+         }
          for (uint32_t k = 0; k < array_size; k++) {
-            uint32_t slot = tu5_alloc_binding(shader->tu5_bindings->tex,
-                                              &shader->tu5_bindings->num_tex,
-                                              TU5_MAX_TEX_BINDINGS, 0,
-                                              att_slot + k, 0, false,
-                                              true, true, is_stencil);
-            if (k == 0)
-               base = slot;
             if (att_slot + k < 16)
                shader->fs.dynamic_input_attachments_used |= 1u << (att_slot + k);
          }

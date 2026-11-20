@@ -649,7 +649,7 @@ tu_dbg_log_gmem_load_store_skips(struct tu_device *device)
 
 static pthread_mutex_t tu_dbg_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int tu_dbg_log_fd = -1;
-static int tu_dbg_log_state = 0; /* 0 = unknown, 1 = on, -1 = off */
+static std::atomic<int> tu_dbg_log_state{0}; /* 0 = unknown, 1 = on, -1 = off */
 static uint32_t tu_dbg_log_lines = 0;
 static uint32_t tu_dbg_log_max_lines = 100000;
 static uint64_t tu_dbg_log_last_check_ns = 0;

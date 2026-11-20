@@ -791,7 +791,7 @@ tu5_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
             if (d) {
                uint64_t addr = ((uint64_t)(d[5] & 0x1ffff) << 32) | (d[4] & ~0x3fu);
                uint32_t fmt = (d[0] >> 22) & 0xff;
-               uint32_t swap = (d[0] >> 20) & 0x3;
+               uint32_t swap = (d[0] & A5XX_TEX_CONST_0_SWAP__MASK) >> A5XX_TEX_CONST_0_SWAP__SHIFT;
                uint32_t tile = d[0] & 0x3;
                tu_dbg_log("  A5_FS_TEX[%u] set=%u bind=%u ptr=%p fmt=0x%x swap=%u tile=%u addr=0x%" PRIx64 " d=[%08x %08x %08x %08x %08x %08x]",
                           i, fb->tex[i].set, fb->tex[i].binding, d, fmt, swap, tile, addr,
