@@ -4007,6 +4007,10 @@ tu_lower_nir(struct tu_device *dev,
       dev->physical_device->info->props.has_hw_multiview;
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      /* Must run before gl_PointCoord is turned into a varying below. */
+      if (key->rp_transform)
+         NIR_PASS(_, nir, tu_nir_lower_rp_transform_fs);
+
       const nir_input_attachment_options att_options = {
          .use_ia_coord_intrin = true,
       };
@@ -4079,6 +4083,10 @@ tu_lower_nir(struct tu_device *dev,
          tu_nir_lower_multiview_sw_vs(nir);
       }
    }
+
+   if (nir->info.stage == MESA_SHADER_VERTEX && key->rp_transform &&
+       is_last_stage)
+      NIR_PASS(_, nir, tu_nir_lower_rp_transform_position);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT && key->multiview_mask &&
        !has_hw_multiview) {

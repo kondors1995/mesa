@@ -288,6 +288,7 @@ struct tu_pipeline_builder
    VkShaderStageFlags active_stages;
 
    bool fragment_density_map;
+   bool rp_transform; /* VK_QCOM_render_pass_transform */
    bool fdm_per_layer;
    uint8_t max_fdm_layers;
 
@@ -1950,6 +1951,12 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
       }
 
       keys[last_pre_rast_stage].fdm_per_layer = builder->fdm_per_layer;
+
+      /* Only a plain vertex shader as the last pre-rasterization stage is
+       * rotated; geometry/tessellation pipelines render unrotated.
+       */
+      if (builder->rp_transform && last_pre_rast_stage == MESA_SHADER_VERTEX)
+         keys[MESA_SHADER_VERTEX].rp_transform = true;
    }
 
    if (builder->state & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
@@ -1957,6 +1964,7 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
          builder->graphics_state.mv->view_mask;
       keys[MESA_SHADER_FRAGMENT].fragment_density_map =
          builder->fragment_density_map;
+      keys[MESA_SHADER_FRAGMENT].rp_transform = builder->rp_transform;
       keys[MESA_SHADER_FRAGMENT].fdm_per_layer =
          builder->fdm_per_layer;
       keys[MESA_SHADER_FRAGMENT].max_fdm_layers = builder->max_fdm_layers;
@@ -5023,6 +5031,7 @@ tu_pipeline_builder_init_graphics(
          &pass->subpasses[create_info->subpass];
 
       tu_fill_render_pass_state(&rp_state, &mv_state, pass, subpass);
+      builder->rp_transform = pass->transform;
 
       if (subpass->feedback_loop_color) {
          rp_flags |=

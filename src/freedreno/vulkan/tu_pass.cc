@@ -1215,6 +1215,9 @@ tu_CreateRenderPass2(VkDevice _device,
    if (TU_DEBUG(FDM) && !tu_render_pass_disable_fdm(device, pass))
       pass->has_fdm = true;
 
+   pass->transform =
+      !!(pCreateInfo->flags & VK_RENDER_PASS_CREATE_TRANSFORM_BIT_QCOM);
+
    p = pass->subpass_attachments;
    uint32_t msrtss_att_idx = pCreateInfo->attachmentCount;
    for (uint32_t i = 0; i < pCreateInfo->subpassCount; i++) {

@@ -1660,6 +1660,12 @@ intrinsic("load_frag_coord_unscaled_ir3", dest_comp=4,
           flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 system_value("alpha_to_coverage_enable_ir3", 1)
 
+# VK_QCOM_render_pass_transform: the current render pass transform (0..3 for
+# identity, 90, 180, 270 degrees) and the native framebuffer size packed as
+# width | (height << 16).
+system_value("rp_transform_ir3", 1)
+system_value("rp_native_size_ir3", 1)
+
 # Per-view gl_FragSizeEXT and gl_FragCoord offset.
 intrinsic("load_frag_size_ir3", src_comp=[1], dest_comp=2, indices=[RANGE],
         flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])

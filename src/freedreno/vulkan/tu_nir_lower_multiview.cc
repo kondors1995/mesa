@@ -206,3 +206,164 @@ tu_nir_lower_multiview_sw_fs(nir_shader *nir)
                                         lower_view_index_to_layer_id_filter,
                                         lower_view_index_to_layer_id, NULL);
 }
+
+/* VK_QCOM_render_pass_transform.
+ *
+ * The application gives positions in the logical (unrotated) space but the
+ * framebuffer is in the native (rotated) space. The transform is
+ * 0/1/2/3 for identity/90/180/270 degrees, matching the Qualcomm driver:
+ *
+ *   90:  (X, Y) -> (-Y,  X)
+ *   180: (X, Y) -> (-X, -Y)
+ *   270: (X, Y) -> ( Y, -X)
+ */
+bool
+tu_nir_lower_rp_transform_position(nir_shader *nir)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_builder b = nir_builder_create(impl);
+
+   nir_foreach_block_reverse(block, impl) {
+      nir_foreach_instr_reverse(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+         if (intrin->intrinsic != nir_intrinsic_store_deref)
+            continue;
+
+         nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+         if (!nir_deref_mode_is(deref, nir_var_shader_out))
+            continue;
+
+         nir_variable *var = nir_deref_instr_get_variable(deref);
+         if (var->data.location != VARYING_SLOT_POS)
+            continue;
+
+         b.cursor = nir_before_instr(instr);
+         nir_def *pos = intrin->src[1].ssa;
+         nir_def *x = nir_channel(&b, pos, 0);
+         nir_def *y = nir_channel(&b, pos, 1);
+         nir_def *tr = nir_load_rp_transform_ir3(&b);
+
+         nir_def *is90 = nir_ieq_imm(&b, tr, 1);
+         nir_def *is180 = nir_ieq_imm(&b, tr, 2);
+         nir_def *is270 = nir_ieq_imm(&b, tr, 3);
+
+         nir_def *nx = nir_bcsel(&b, is90, nir_fneg(&b, y),
+                       nir_bcsel(&b, is180, nir_fneg(&b, x),
+                       nir_bcsel(&b, is270, y, x)));
+         nir_def *ny = nir_bcsel(&b, is90, x,
+                       nir_bcsel(&b, is180, nir_fneg(&b, y),
+                       nir_bcsel(&b, is270, nir_fneg(&b, x), y)));
+
+         nir_def *new_pos = nir_vec4(&b, nx, ny, nir_channel(&b, pos, 2),
+                                     nir_channel(&b, pos, 3));
+         nir_src_rewrite(&intrin->src[1], new_pos);
+         return nir_progress(true, impl, nir_metadata_control_flow);
+      }
+   }
+
+   return nir_no_progress(impl);
+}
+
+/* Fragment shader side: gl_FragCoord, gl_PointCoord and derivatives are
+ * reported in the logical space. With the native size NWxNH and fx,fy the
+ * native position:
+ *
+ *   90:  (x, y) = (fy, NW - fx)      270: (x, y) = (NH - fy, fx)
+ *   180: (x, y) = (NW - fx, NH - fy)
+ *
+ * and the point coordinate (s, t) and derivatives follow the same mapping.
+ */
+static nir_def *
+rpt_select4(nir_builder *b, nir_def *tr, nir_def *v0, nir_def *v1,
+            nir_def *v2, nir_def *v3)
+{
+   return nir_bcsel(b, nir_ieq_imm(b, tr, 1), v1,
+          nir_bcsel(b, nir_ieq_imm(b, tr, 2), v2,
+          nir_bcsel(b, nir_ieq_imm(b, tr, 3), v3, v0)));
+}
+
+static bool
+lower_rp_transform_fs_instr(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   b->cursor = nir_after_instr(instr);
+
+   if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      if (intrin->intrinsic == nir_intrinsic_load_frag_coord) {
+         nir_def *fc = &intrin->def;
+         nir_def *fx = nir_channel(b, fc, 0);
+         nir_def *fy = nir_channel(b, fc, 1);
+         nir_def *tr = nir_load_rp_transform_ir3(b);
+         nir_def *size = nir_load_rp_native_size_ir3(b);
+         nir_def *nw = nir_u2f32(b, nir_iand_imm(b, size, 0xffff));
+         nir_def *nh = nir_u2f32(b, nir_ushr_imm(b, size, 16));
+
+         nir_def *x = rpt_select4(b, tr, fx, fy, nir_fsub(b, nw, fx),
+                                  nir_fsub(b, nh, fy));
+         nir_def *y = rpt_select4(b, tr, fy, nir_fsub(b, nw, fx),
+                                  nir_fsub(b, nh, fy), fx);
+         nir_def *new_fc = nir_vec4(b, x, y, nir_channel(b, fc, 2),
+                                    nir_channel(b, fc, 3));
+         nir_def_rewrite_uses_after(fc, new_fc);
+         return true;
+      }
+      if (intrin->intrinsic == nir_intrinsic_load_point_coord) {
+         nir_def *pc = &intrin->def;
+         nir_def *s = nir_channel(b, pc, 0);
+         nir_def *t = nir_channel(b, pc, 1);
+         nir_def *one = nir_imm_float(b, 1.0f);
+         nir_def *tr = nir_load_rp_transform_ir3(b);
+         nir_def *ns = rpt_select4(b, tr, s, t, nir_fsub(b, one, s),
+                                   nir_fsub(b, one, t));
+         nir_def *nt = rpt_select4(b, tr, t, nir_fsub(b, one, s),
+                                   nir_fsub(b, one, t), s);
+         nir_def *new_pc = nir_vec2(b, ns, nt);
+         nir_def_rewrite_uses_after(pc, new_pc);
+         return true;
+      }
+   } else if (instr->type == nir_instr_type_alu) {
+      nir_alu_instr *alu = nir_instr_as_alu(instr);
+      bool is_x = alu->op == nir_op_fddx || alu->op == nir_op_fddx_fine ||
+                  alu->op == nir_op_fddx_coarse;
+      bool is_y = alu->op == nir_op_fddy || alu->op == nir_op_fddy_fine ||
+                  alu->op == nir_op_fddy_coarse;
+      if (!is_x && !is_y)
+         return false;
+
+      nir_op other = alu->op == nir_op_fddx ? nir_op_fddy :
+                     alu->op == nir_op_fddx_fine ? nir_op_fddy_fine :
+                     alu->op == nir_op_fddx_coarse ? nir_op_fddy_coarse :
+                     alu->op == nir_op_fddy ? nir_op_fddx :
+                     alu->op == nir_op_fddy_fine ? nir_op_fddx_fine :
+                     nir_op_fddx_coarse;
+      nir_def *self = &alu->def;
+      nir_def *src = alu->src[0].src.ssa;
+      nir_def *neg_self = nir_fneg(b, self);
+      nir_def *oth = nir_build_alu1(b, other, src);
+      nir_def *neg_oth = nir_fneg(b, oth);
+      nir_def *tr = nir_load_rp_transform_ir3(b);
+      nir_def *res;
+      if (is_x) {
+         /* ddx_logical: native ddx, ddy, -ddx, -ddy */
+         res = rpt_select4(b, tr, self, oth, neg_self, neg_oth);
+      } else {
+         /* ddy_logical: native ddy, -ddx, -ddy, ddx */
+         res = rpt_select4(b, tr, self, neg_oth, neg_self, oth);
+      }
+      nir_def_rewrite_uses_after(self, res);
+      return true;
+   }
+
+   return false;
+}
+
+bool
+tu_nir_lower_rp_transform_fs(nir_shader *nir)
+{
+   assert(nir->info.stage == MESA_SHADER_FRAGMENT);
+   return nir_shader_instructions_pass(nir, lower_rp_transform_fs_instr,
+                                       nir_metadata_control_flow, NULL);
+}

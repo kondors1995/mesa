@@ -1882,6 +1882,14 @@ ir3_get_driver_param_info(const nir_shader *shader,
    case nir_intrinsic_load_alpha_to_coverage_enable_ir3:
       param_info->offset = IR3_DP_FS(alpha_to_coverage_enable);
       break;
+   case nir_intrinsic_load_rp_transform_ir3:
+      param_info->offset = shader->info.stage == MESA_SHADER_FRAGMENT ?
+         IR3_DP_FS(rp_transform) : IR3_DP_VS(rp_transform);
+      break;
+   case nir_intrinsic_load_rp_native_size_ir3:
+      param_info->offset = shader->info.stage == MESA_SHADER_FRAGMENT ?
+         IR3_DP_FS(rp_native_size) : IR3_DP_VS(rp_native_size);
+      break;
    case nir_intrinsic_load_view_index:
       /* Report the driver-param offset for the software-multiview path
        * (devices without HW multiview), where the view index is supplied as

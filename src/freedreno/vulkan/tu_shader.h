@@ -181,7 +181,8 @@ struct tu_shader_key {
    bool lower_view_index_to_device_index : 1;
    bool custom_resolve : 1;
    bool emulate_alpha_to_coverage : 1;
-   uint32_t padding : 23;
+   bool rp_transform : 1; /* VK_QCOM_render_pass_transform */
+   uint32_t padding : 22;
 
    enum ir3_wavesize_option api_wavesize, real_wavesize;
 
@@ -210,6 +211,12 @@ tu_nir_lower_multiview_sw_vs(nir_shader *nir);
 
 bool
 tu_nir_lower_multiview_sw_fs(nir_shader *nir);
+
+bool
+tu_nir_lower_rp_transform_position(nir_shader *nir);
+
+bool
+tu_nir_lower_rp_transform_fs(nir_shader *nir);
 
 bool
 tu_nir_lower_ray_queries(nir_shader *nir);

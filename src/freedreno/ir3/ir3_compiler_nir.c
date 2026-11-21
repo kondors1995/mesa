@@ -3196,6 +3196,16 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_load_alpha_to_coverage_enable_ir3:
       dst[0] = create_driver_param(ctx, IR3_DP_FS(alpha_to_coverage_enable));
       break;
+   case nir_intrinsic_load_rp_transform_ir3:
+      dst[0] = create_driver_param(ctx, ctx->so->type == MESA_SHADER_FRAGMENT ?
+                                   IR3_DP_FS(rp_transform) :
+                                   IR3_DP_VS(rp_transform));
+      break;
+   case nir_intrinsic_load_rp_native_size_ir3:
+      dst[0] = create_driver_param(ctx, ctx->so->type == MESA_SHADER_FRAGMENT ?
+                                   IR3_DP_FS(rp_native_size) :
+                                   IR3_DP_VS(rp_native_size));
+      break;
    case nir_intrinsic_load_frag_size_ir3:
    case nir_intrinsic_load_frag_offset_ir3:
    case nir_intrinsic_load_gmem_frag_scale_ir3:

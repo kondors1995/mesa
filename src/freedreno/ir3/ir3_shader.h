@@ -69,6 +69,12 @@ struct ir3_driver_params_vs {
     * driver param when the hardware does not have native multiview.
     */
    uint32_t view_index;
+   /* VK_QCOM_render_pass_transform: current transform (0..3) and the native
+    * framebuffer size packed as width | (height << 16). Kept in the second
+    * vec4 so that CP_DRAW_INDIRECT_MULTI cannot clobber them.
+    */
+   uint32_t rp_transform;
+   uint32_t rp_native_size;
    /* user-clip-plane components, up to 8x vec4's: */
    struct {
       uint32_t x;
@@ -76,7 +82,6 @@ struct ir3_driver_params_vs {
       uint32_t z;
       uint32_t w;
    } ucp[8];
-   uint32_t __pad_38_39[2];
 };
 #define IR3_DP_VS(name) dword_offsetof(struct ir3_driver_params_vs, name)
 
@@ -108,7 +113,9 @@ struct ir3_driver_params_fs {
 #define IR3_DP_FS_DYNAMIC dword_offsetof(struct ir3_driver_params_fs, frag_invocation_count)
    uint32_t frag_invocation_count;
    uint32_t alpha_to_coverage_enable;
-   uint32_t __pad_06_07[2];
+   /* VK_QCOM_render_pass_transform, see ir3_driver_params_vs. */
+   uint32_t rp_transform;
+   uint32_t rp_native_size;
    uint32_t frag_size;
    uint32_t __pad_09;
    uint32_t frag_offset;
