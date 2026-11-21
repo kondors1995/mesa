@@ -4139,7 +4139,7 @@ tu_pipeline_builder_emit_state(struct tu_pipeline_builder *builder,
    bool no_per_view_viewport = pipeline_contains_all_shader_state(pipeline) &&
       !pipeline->program.per_view_viewport &&
       !pipeline->program.per_layer_viewport &&
-      !(fs && fs->fs.has_fdm);
+      !(fs && fs->fs.has_fdm) && !builder->rp_transform;
    DRAW_STATE_COND(viewport, TU_DYNAMIC_STATE_VIEWPORT, no_per_view_viewport,
                    builder->graphics_state.vp,
                    builder->graphics_state.rs);
@@ -4423,11 +4423,29 @@ tu_emit_draw_state(struct tu_cmd_buffer *cmd)
 #undef tu6_emit_vertex_stride
 #undef tu6_vertex_stride_size
 
+   /* VK_QCOM_render_pass_transform: viewports and scissors are given in the
+    * logical space and have to be emitted in the native one.
+    */
+   struct vk_viewport_state rpt_vp;
+   const struct vk_viewport_state *vp_arg = &cmd->vk.dynamic_graphics_state.vp;
+   if (cmd->state.rp_transform_active && cmd->state.rp_transform) {
+      rpt_vp = *vp_arg;
+      for (uint32_t i = 0; i < rpt_vp.viewport_count; i++)
+         rpt_vp.viewports[i] = tu_rpt_viewport(cmd->state.rp_transform,
+                                               cmd->state.rp_native_size,
+                                               rpt_vp.viewports[i]);
+      for (uint32_t i = 0; i < rpt_vp.scissor_count; i++)
+         rpt_vp.scissors[i] = tu_rpt_rect(cmd->state.rp_transform,
+                                          cmd->state.rp_native_size,
+                                          rpt_vp.scissors[i]);
+      vp_arg = &rpt_vp;
+   }
+
    DRAW_STATE_FDM(viewport, TU_DYNAMIC_STATE_VIEWPORT,
-                  &cmd->vk.dynamic_graphics_state.vp,
+                  vp_arg,
                   &cmd->vk.dynamic_graphics_state.rs);
    DRAW_STATE_FDM(scissor, TU_DYNAMIC_STATE_SCISSOR,
-                  &cmd->vk.dynamic_graphics_state.vp);
+                  vp_arg);
    DRAW_STATE(sample_locations,
               TU_DYNAMIC_STATE_SAMPLE_LOCATIONS,
               cmd->vk.dynamic_graphics_state.ms.sample_locations_enable,

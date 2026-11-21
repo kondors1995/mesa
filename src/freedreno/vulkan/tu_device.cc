@@ -443,6 +443,8 @@ get_device_extensions(const struct tu_physical_device *device,
          device->info->props.has_per_view_viewport,
       .QCOM_render_pass_shader_resolve = !is_a5xx,
       .QCOM_render_pass_store_ops = true,
+      .QCOM_render_pass_transform = device->info->chip == 6 &&
+         !device->info->props.load_shader_consts_via_preamble,
       .QCOM_tile_properties = !is_a5xx,
       .QCOM_rotated_copy_commands = true,
       .VALVE_buffer_device_address_allocation_alignment =

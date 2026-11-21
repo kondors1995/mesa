@@ -4851,6 +4851,31 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
             cmd_buffer->state.subpass =
                &cmd_buffer->state.pass->subpasses[pBeginInfo->pInheritanceInfo->subpass];
             cmd_buffer->state.fdm_enabled = cmd_buffer->state.pass->has_fdm;
+
+            /* VK_QCOM_render_pass_transform */
+            cmd_buffer->state.rp_transform_active =
+               cmd_buffer->state.pass->transform;
+            cmd_buffer->state.rp_transform = 0;
+            if (cmd_buffer->state.pass->transform) {
+               const VkCommandBufferInheritanceRenderPassTransformInfoQCOM *rpt =
+                  vk_find_struct_const(pBeginInfo->pInheritanceInfo->pNext,
+                     COMMAND_BUFFER_INHERITANCE_RENDER_PASS_TRANSFORM_INFO_QCOM);
+               VkExtent2D native = { 0, 0 };
+               if (pBeginInfo->pInheritanceInfo->framebuffer != VK_NULL_HANDLE) {
+                  VK_FROM_HANDLE(tu_framebuffer, ifb,
+                                 pBeginInfo->pInheritanceInfo->framebuffer);
+                  native = (VkExtent2D) { ifb->width, ifb->height };
+               } else if (rpt) {
+                  /* No framebuffer: assume the logical render area covers it. */
+                  uint32_t w = rpt->renderArea.offset.x + rpt->renderArea.extent.width;
+                  uint32_t h = rpt->renderArea.offset.y + rpt->renderArea.extent.height;
+                  uint32_t t = tu_rpt_transform_index(rpt->transform);
+                  native = (t == 1 || t == 3) ? (VkExtent2D) { h, w } : (VkExtent2D) { w, h };
+               }
+               cmd_buffer->state.rp_native_size = native;
+               if (rpt)
+                  cmd_buffer->state.rp_transform = tu_rpt_transform_index(rpt->transform);
+            }
          }
          tu_fill_render_pass_state(&cmd_buffer->state.vk_rp,
                                    &cmd_buffer->state.vk_mv,
@@ -7608,8 +7633,23 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
    cmd->state.pass = pass;
    cmd->state.subpass = pass->subpasses;
    cmd->state.framebuffer = fb;
-   tu_set_render_area(cmd, &pRenderPassBegin->renderArea,
-                      pRenderPassBegin->pNext);
+   VkRect2D begin_render_area = pRenderPassBegin->renderArea;
+   cmd->state.rp_transform_active = pass->transform;
+   cmd->state.rp_transform = 0;
+   cmd->state.rp_native_size = (VkExtent2D) { fb->width, fb->height };
+   if (pass->transform) {
+      const VkRenderPassTransformBeginInfoQCOM *rpt =
+         vk_find_struct_const(pRenderPassBegin->pNext,
+                              RENDER_PASS_TRANSFORM_BEGIN_INFO_QCOM);
+      if (rpt)
+         cmd->state.rp_transform = tu_rpt_transform_index(rpt->transform);
+      begin_render_area = tu_rpt_rect(cmd->state.rp_transform,
+                                      cmd->state.rp_native_size,
+                                      begin_render_area);
+      cmd->state.dirty |= TU_CMD_DIRTY_FDM | TU_CMD_DIRTY_VS_PARAMS |
+                          TU_CMD_DIRTY_FS;
+   }
+   tu_set_render_area(cmd, &begin_render_area, pRenderPassBegin->pNext);
    cmd->state.fdm_per_layer = pass->has_layered_fdm;
 
    if (pass->attachment_count > 0) {
@@ -7767,6 +7807,8 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    cmd->state.pass = &cmd->dynamic_pass;
    cmd->state.subpass = &cmd->dynamic_subpasses[0];
    cmd->state.framebuffer = &cmd->dynamic_framebuffer;
+   cmd->state.rp_transform_active = false;
+   cmd->state.rp_transform = 0;
    tu_set_render_area(cmd, &pRenderingInfo->renderArea,
                       pRenderingInfo->pNext);
    cmd->state.fdm_per_layer =
@@ -8944,8 +8986,10 @@ tu_emit_fdm_params(struct tu_cmd_buffer *cmd,
    tu_cs_emit(cs, fs->fs.sample_shading ?
               cmd->vk.dynamic_graphics_state.ms.rasterization_samples : 1);
    tu_cs_emit(cs, cmd->vk.dynamic_graphics_state.ms.alpha_to_coverage_enable);
-   tu_cs_emit(cs, 0);
-   tu_cs_emit(cs, 0);
+   /* VK_QCOM_render_pass_transform */
+   tu_cs_emit(cs, cmd->state.rp_transform_active ? cmd->state.rp_transform : 0);
+   tu_cs_emit(cs, cmd->state.rp_native_size.width |
+                  (cmd->state.rp_native_size.height << 16));
 
    STATIC_ASSERT(IR3_DP_FS(frag_size) == IR3_DP_FS_DYNAMIC + 4);
    STATIC_ASSERT(IR3_DP_FS(frag_offset) == IR3_DP_FS_DYNAMIC + 6);
@@ -9557,7 +9601,13 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
     */
    const bool sw_multiview = cmd->state.sw_multiview;
    const uint32_t view_index = sw_multiview ? cmd->state.sw_view_index : 0;
-   const unsigned num_vec4 = sw_multiview ? 2 : 1;
+   /* VK_QCOM_render_pass_transform values also live in the second vec4. */
+   const struct ir3_const_state *vs_const_state =
+      &cmd->state.program.link[MESA_SHADER_VERTEX].const_state;
+   const bool rpt = cmd->state.rp_transform_active &&
+      vs_const_state->num_driver_params > IR3_DP_VS(rp_transform);
+   const uint32_t rp_transform = rpt ? cmd->state.rp_transform : 0;
+   const unsigned num_vec4 = (sw_multiview || rpt) ? 2 : 1;
 
    /* Beside re-emitting params when they are changed, we should re-emit
     * them after constants are invalidated via SP_UPDATE_CNTL or after we
@@ -9571,6 +9621,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
        first_instance == cmd->state.last_vs_params.first_instance &&
        sw_multiview == cmd->state.last_vs_params.sw_multiview &&
        view_index == cmd->state.last_vs_params.view_index &&
+       rp_transform == cmd->state.last_vs_params.rp_transform &&
        skip_vfd == cmd->state.last_vs_params.skip_vfd) {
       return;
    }
@@ -9587,11 +9638,12 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
       consts.map[1] = vertex_offset;
       consts.map[2] = first_instance;
       consts.map[3] = 0;
-      if (sw_multiview) {
+      if (num_vec4 == 2) {
          consts.map[4] = 0;
          consts.map[5] = view_index;
-         consts.map[6] = 0;
-         consts.map[7] = 0;
+         consts.map[6] = rp_transform;
+         consts.map[7] = cmd->state.rp_native_size.width |
+                         (cmd->state.rp_native_size.height << 16);
       }
 
       consts_iova = consts.iova;
@@ -9646,6 +9698,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
    cmd->state.last_vs_params.first_instance = first_instance;
    cmd->state.last_vs_params.draw_id = draw_id;
    cmd->state.last_vs_params.view_index = view_index;
+   cmd->state.last_vs_params.rp_transform = rp_transform;
    cmd->state.last_vs_params.sw_multiview = sw_multiview;
    cmd->state.last_vs_params.skip_vfd = skip_vfd;
    cmd->state.last_vs_params.empty = false;

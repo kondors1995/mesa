@@ -295,6 +295,7 @@ struct tu_vs_params {
    uint32_t first_instance;
    uint32_t draw_id;
    uint32_t view_index;
+   uint32_t rp_transform;
    /* Whether the last emitted params were for a SW multiview replay. Both the
     * size of the uploaded const and whether VFD registers are part of the draw
     * state depend on it, so it has to invalidate the cache below.
@@ -673,6 +674,15 @@ struct tu_cmd_state
     */
    bool sw_multiview;
    uint32_t sw_view_index;
+
+   /* VK_QCOM_render_pass_transform: the render pass instance was started with
+    * a render pass created with the TRANSFORM bit; rp_transform is 0 for
+    * identity or 1/2/3 for 90/180/270 degrees and rp_native_size the size of
+    * the (rotated) framebuffer.
+    */
+   bool rp_transform_active;
+   uint32_t rp_transform;
+   VkExtent2D rp_native_size;
 
    struct tu_tess_params tess_params;
 
@@ -1193,6 +1203,62 @@ euclid_rem(int32_t divisor, int32_t divisend)
 /* Calculate how much the bins for a given view should be shifted to the left
  * and upwards, given the application-provided FDM offset.
  */
+/* VK_QCOM_render_pass_transform: map logical (unrotated) coordinates to the
+ * native framebuffer, n being the native size. tr is 1/2/3 for 90/180/270
+ * degrees, matching the Qualcomm driver:
+ *   90:  native x = NW - y,  native y = x
+ *   180: native x = NW - x,  native y = NH - y
+ *   270: native x = y,       native y = NH - x
+ */
+static inline VkRect2D
+tu_rpt_rect(uint32_t tr, VkExtent2D n, VkRect2D r)
+{
+   int32_t x = r.offset.x, y = r.offset.y;
+   int32_t w = r.extent.width, h = r.extent.height;
+   int32_t nw = n.width, nh = n.height;
+   switch (tr) {
+   case 1:
+      return (VkRect2D) { { nw - y - h, x }, { (uint32_t) h, (uint32_t) w } };
+   case 2:
+      return (VkRect2D) { { nw - x - w, nh - y - h }, { (uint32_t) w, (uint32_t) h } };
+   case 3:
+      return (VkRect2D) { { y, nh - x - w }, { (uint32_t) h, (uint32_t) w } };
+   default:
+      return r;
+   }
+}
+
+static inline VkViewport
+tu_rpt_viewport(uint32_t tr, VkExtent2D n, VkViewport v)
+{
+   float hw = v.width / 2, hh = v.height / 2;
+   float cx = v.x + hw, cy = v.y + hh;
+   float nw = n.width, nh = n.height;
+   float ncx, ncy, nhw, nhh;
+   switch (tr) {
+   case 1: ncx = nw - cy; ncy = cx; nhw = hh; nhh = hw; break;
+   case 2: ncx = nw - cx; ncy = nh - cy; nhw = hw; nhh = hh; break;
+   case 3: ncx = cy; ncy = nh - cx; nhw = hh; nhh = hw; break;
+   default: return v;
+   }
+   v.x = ncx - nhw;
+   v.y = ncy - nhh;
+   v.width = 2 * nhw;
+   v.height = 2 * nhh;
+   return v;
+}
+
+static inline uint32_t
+tu_rpt_transform_index(VkSurfaceTransformFlagBitsKHR t)
+{
+   switch (t) {
+   case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: return 1;
+   case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return 2;
+   case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return 3;
+   default: return 0;
+   }
+}
+
 static inline VkOffset2D
 tu_bin_offset(VkOffset2D fdm_offset, const struct tu_tiling_config *tiling)
 {

@@ -5483,6 +5483,23 @@ tu_CmdClearAttachments(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
 
+   /* VK_QCOM_render_pass_transform: rects are in the logical space. */
+   VkClearRect rpt_rects_small[16];
+   VkClearRect *rpt_rects = NULL;
+   if (cmd->state.rp_transform_active && cmd->state.rp_transform) {
+      rpt_rects = rectCount <= ARRAY_SIZE(rpt_rects_small) ? rpt_rects_small :
+         (VkClearRect *) malloc(rectCount * sizeof(VkClearRect));
+      if (rpt_rects) {
+         for (uint32_t i = 0; i < rectCount; i++) {
+            rpt_rects[i] = pRects[i];
+            rpt_rects[i].rect = tu_rpt_rect(cmd->state.rp_transform,
+                                            cmd->state.rp_native_size,
+                                            pRects[i].rect);
+         }
+         pRects = rpt_rects;
+      }
+   }
+
    for (uint32_t j = 0; j < attachmentCount; j++) {
       if ((pAttachments[j].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
          continue;
@@ -5502,6 +5519,9 @@ tu_CmdClearAttachments(VkCommandBuffer commandBuffer,
       tu_clear_attachments<CHIP>(cmd, attachmentCount, pAttachments,
                                  rectCount, pRects);
    }
+
+   if (rpt_rects && rpt_rects != rpt_rects_small)
+      free(rpt_rects);
 }
 TU_GENX(tu_CmdClearAttachments);
 
